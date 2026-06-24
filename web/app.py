@@ -27,7 +27,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 
 # Ensure the project root is on sys.path so data_collection imports work
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -883,11 +883,17 @@ _SPA_ROUTES = ["/", "/profile", "/jobs", "/history", "/login"]
 
 
 def _serve_spa():
-    """Serve the React SPA, falling back to a helpful message if not built."""
-    dist_assets = Path(__file__).parent / "static" / "dist" / "assets"
+    """Serve the React SPA index.html directly (Vite-built, hashed assets).
+
+    Uses send_from_directory to serve the raw index.html from static/dist/.
+    This avoids Jinja template globbing issues — Vite already injects correct
+    <script> and <link> tags with content-hashed filenames.
+    """
+    dist_dir = Path(__file__).parent / "static" / "dist"
+    dist_assets = dist_dir / "assets"
     dist_built = dist_assets.exists() and any(dist_assets.glob("index-*.js"))
     if dist_built:
-        return render_template("dashboard_react.html")
+        return send_from_directory(str(dist_dir), "index.html")
     return (
         "<html><body style='padding:2rem;font-family:monospace;text-align:center'>"
         "<h2>Dashboard not built</h2>"

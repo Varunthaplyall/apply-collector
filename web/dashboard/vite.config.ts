@@ -2,8 +2,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
+  // In production (Docker/Render), Flask serves static files at /static/dist/.
+  // In dev, Vite's own dev server handles assets at /.
+  base: mode === 'production' ? '/static/dist/' : '/',
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -20,4 +23,4 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:5000',
     },
   },
-})
+}))
