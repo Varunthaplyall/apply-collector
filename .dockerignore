@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Dev tools
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.playwright-mcp/
+
+# Git
+.git/
+.gitignore
+
+# Data (DB files, outputs — not needed in container, DB is Supabase)
+data/
+outputs/
+samples/
+
+# Frontend (built separately or served via Vite dev)
+web/dashboard/node_modules/
+web/dashboard/dist/
+
+# Env (Render injects via dashboard)
+.env
+.env.template
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The Apply Collector — Dashboard</title>
+    {% set dist_assets = namespace(css='', js='') %}
+    {% set dist_path = 'dist/assets' %}
+    {% for file in static_files() %}
+      {% if file.startswith(dist_path ~ '/index-') %}
+        {% if file.endswith('.css') %}{% set dist_assets.css = file %}{% endif %}
+        {% if file.endswith('.js') %}{% set dist_assets.js = file %}{% endif %}
+      {% endif %}
+    {% endfor %}
+    {% if dist_assets.css %}
+    <link rel="stylesheet" href="{{ url_for('static', filename=dist_assets.css) }}">
+    {% endif %}
+    <script>
+      (function() {
+        var theme = localStorage.getItem('theme');
+        if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+</head>
+<body class="min-h-screen bg-background">
+    <div id="root"></div>
+    {% if dist_assets.js %}
+    <script type="module" crossorigin src="{{ url_for('static', filename=dist_assets.js) }}"></script>
+    {% else %}
+    <div style="padding:2rem;text-align:center;font-family:monospace;">
+      <h2>Dashboard assets not built</h2>
+      <p>Run <code>cd web/dashboard && npm run build</code> to build the React dashboard.</p>
+      <p><a href="/legacy">View legacy dashboard &rarr;</a></p>
+    </div>
+    {% endif %}
+</body>
+</html>

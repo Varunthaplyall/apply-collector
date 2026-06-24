@@ -1,0 +1,27 @@
+# ── Render Blueprint ─────────────────────────────────────────────────────────
+# Drop this file in your repo root. When you connect the repo to Render,
+# it auto-detects and provisions the service. No manual config needed.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: apply-collector
+    runtime: docker
+    plan: free            # 512MB RAM — our L3 model uses ~250MB
+    region: oregon        # or singapore (closer to India)
+    healthCheckPath: /api/stats
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PORT
+        value: "5000"
+      # Fill these in Render dashboard (or use sync: false below)
+      - key: DATABASE_URL
+        sync: false       # set manually — contains password
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false

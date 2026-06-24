@@ -1,0 +1,162 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@800,900,700,500,400,300&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 14% 46%;
+    --accent: 250 95% 65%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+    --radius: 0.75rem;
+
+    /* Extended palette */
+    --brand-blue: 221 83% 53%;
+    --brand-violet: 250 95% 65%;
+    --brand-emerald: 160 84% 39%;
+    --brand-amber: 38 92% 50%;
+    --brand-rose: 350 89% 60%;
+    --brand-cyan: 189 94% 43%;
+    --brand-indigo: 239 84% 67%;
+  }
+
+  .dark {
+    --background: 0 0% 3%;
+    --foreground: 0 0% 93%;
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 93%;
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 93%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 11%;
+    --secondary-foreground: 0 0% 93%;
+    --muted: 0 0% 11%;
+    --muted-foreground: 0 0% 55%;
+    --accent: 250 95% 70%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 224 76% 48%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'rlig' 1, 'calt' 1, 'ss01' 1;
+  }
+
+  ::selection {
+    @apply bg-primary/20 text-foreground;
+  }
+}
+
+/* Custom scrollbar — polished, minimal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(215 14% 46% / 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(215 14% 46% / 0.45);
+}
+
+/* Premium gradient meshes for hero elements */
+.bg-mesh {
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 20%, hsl(var(--brand-blue) / 0.07), transparent 50%),
+    radial-gradient(ellipse 60% 80% at 80% 40%, hsl(var(--brand-violet) / 0.06), transparent 50%),
+    radial-gradient(ellipse 40% 60% at 50% 80%, hsl(var(--brand-cyan) / 0.05), transparent 50%);
+}
+.dark .bg-mesh {
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 20%, hsl(var(--brand-blue) / 0.08), transparent 50%),
+    radial-gradient(ellipse 60% 80% at 80% 40%, hsl(var(--brand-violet) / 0.06), transparent 50%),
+    radial-gradient(ellipse 40% 60% at 50% 80%, hsl(var(--brand-cyan) / 0.04), transparent 50%);
+}
+
+/* Subtle grid background for the main area */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.025) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+.dark .bg-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+}
+
+/* Shimmer gradient for skeleton loaders */
+.shimmer-bg {
+  background: linear-gradient(
+    110deg,
+    hsl(var(--muted)) 0%,
+    hsl(var(--muted)) 40%,
+    hsl(var(--muted-foreground) / 0.08) 50%,
+    hsl(var(--muted)) 60%,
+    hsl(var(--muted)) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-move 2s ease-in-out infinite;
+}
+
+@keyframes shimmer-move {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Glow ring for focus states */
+.glow-ring {
+  box-shadow:
+    0 0 0 1px hsl(var(--ring) / 0.3),
+    0 0 0 4px hsl(var(--ring) / 0.08),
+    0 0 20px -5px hsl(var(--ring) / 0.15);
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, hsl(var(--brand-blue)), hsl(var(--brand-violet)));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-emerald {
+  background: linear-gradient(135deg, hsl(var(--brand-emerald)), hsl(var(--brand-cyan)));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

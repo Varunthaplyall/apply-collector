@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/*.db
+*.egg-info/
+output/
+generate/candidate_profile.json
+web/dashboard/.env
+web/static/dist/
+.playwright-mcp/
+node_modules/
