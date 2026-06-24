@@ -1,9 +1,26 @@
 # ── Apply Collector — Render-optimized Docker image ──────────────────────────
 #
-# Total image size: ~350MB  |  Runtime memory: ~250MB (fits Render free 512MB)
+# Multi-stage build: Stage 1 builds the React SPA, Stage 2 runs Flask + Python.
+# Total image size: ~400MB  |  Runtime memory: ~300MB (fits Render free 512MB)
 # Model pre-downloaded at build time — no HuggingFace call on cold start.
 # All collectors use httpx (no Playwright browser needed).
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stage 1 — Build React SPA
+# ═══════════════════════════════════════════════════════════════════════════════
+FROM node:20-alpine AS frontend
+
+WORKDIR /app/web/dashboard
+
+COPY web/dashboard/package.json web/dashboard/package-lock.json ./
+RUN npm ci
+
+COPY web/dashboard/ ./
+RUN npm run build
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stage 2 — Python runtime
+# ═══════════════════════════════════════════════════════════════════════════════
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -26,6 +43,9 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
 
 # ── App code ─────────────────────────────────────────────────────────────────
 COPY . .
+
+# ── Copy built React SPA from frontend stage ─────────────────────────────────
+COPY --from=frontend /app/web/static/dist /app/web/static/dist
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1
