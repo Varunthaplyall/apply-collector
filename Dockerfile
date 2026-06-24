@@ -10,6 +10,13 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 FROM node:20-alpine AS frontend
 
+# Vite build-time env vars (VITE_ prefix is required for import.meta.env exposure)
+# These are Supabase publishable keys — safe to include in the image.
+ARG VITE_SUPABASE_URL=https://gmqoclqbglkhjpwwfntc.supabase.co
+ARG VITE_SUPABASE_ANON_KEY=sb_publishable_vN59M8NXySGlacCch4oc2g_SDIuwMG0
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+
 WORKDIR /app/web/dashboard
 
 COPY web/dashboard/package.json web/dashboard/package-lock.json ./
