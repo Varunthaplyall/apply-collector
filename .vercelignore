@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Node (installed at build time, not needed in deployment)
+web/dashboard/node_modules/
+
+# Data & output
+data/
+output/
+
+# Dev tools
+.playwright-mcp/
+Dockerfile
+render.yaml
+start.sh
+scripts/
+
+# Git
+.git/
+.gitignore

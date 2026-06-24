@@ -30,26 +30,43 @@ logger = logging.getLogger(__name__)
 
 _model = None
 _model_lock = threading.Lock()
+_MODEL_LOAD_FAILED = False  # Set to True when sentence-transformers is unavailable
 _MODEL_NAME = "paraphrase-MiniLM-L3-v2"
 _EMBEDDING_DIM = 384
 
 
 def _get_model():
-    """Lazy-load the sentence-transformers model (thread-safe singleton)."""
-    global _model
+    """Lazy-load the sentence-transformers model (thread-safe singleton).
+
+    Returns the model if available, or None if sentence-transformers is not
+    installed (e.g., on Vercel free tier where PyTorch is too large).
+    """
+    global _model, _MODEL_LOAD_FAILED
     if _model is not None:
         return _model
+    if _MODEL_LOAD_FAILED:
+        return None  # Don't keep retrying after a known failure
 
     with _model_lock:
         if _model is not None:
             return _model
+        if _MODEL_LOAD_FAILED:
+            return None
         try:
             from sentence_transformers import SentenceTransformer
             _model = SentenceTransformer(_MODEL_NAME)
             logger.info("Embedding model loaded: %s (dim=%d)", _MODEL_NAME, _EMBEDDING_DIM)
+        except ModuleNotFoundError:
+            _MODEL_LOAD_FAILED = True
+            logger.warning(
+                "sentence-transformers not installed — semantic embedding disabled. "
+                "Scoring will use keyword matching only."
+            )
+            return None
         except Exception:
             logger.exception("Failed to load embedding model %s", _MODEL_NAME)
-            raise
+            _MODEL_LOAD_FAILED = True
+            return None
         return _model
 
 
@@ -59,13 +76,15 @@ def _get_model():
 def embed_text(text: str) -> list[float]:
     """Compute embedding for a single text string.
 
-    Returns a 384-dimensional float list (or all-zeros on failure).
+    Returns a 384-dimensional float list (or all-zeros when model unavailable).
     """
     if not text or not text.strip():
         return [0.0] * _EMBEDDING_DIM
 
     try:
         model = _get_model()
+        if model is None:
+            return [0.0] * _EMBEDDING_DIM
         vec = model.encode(text.strip(), normalize_embeddings=True)
         return vec.tolist()
     except Exception:
@@ -77,13 +96,16 @@ def embed_texts(texts: Sequence[str], batch_size: int = 64) -> list[list[float]]
     """Compute embeddings for multiple texts in batches.
 
     Returns a list of 384-dimensional float lists, same length as input.
+    Returns all-zeros when model unavailable.
     """
     if not texts:
         return []
 
-    cleaned = [t.strip() if t else "" for t in texts]
     try:
         model = _get_model()
+        if model is None:
+            return [[0.0] * _EMBEDDING_DIM for _ in texts]
+        cleaned = [t.strip() if t else "" for t in texts]
         all_embeddings = model.encode(
             cleaned,
             normalize_embeddings=True,

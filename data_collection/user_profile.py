@@ -889,26 +889,30 @@ def score_job_against_profile(
     computed_profile_embedding = profile_embedding  # may be None (not provided)
 
     if job_embedding and isinstance(job_embedding, list) and len(job_embedding) > 0:
-        from data_collection.embedding import (
-            embed_profile, cosine_similarity, is_embedding_valid,
-        )
-        # Only use embeddings if the profile has enough information to embed
-        has_profile_info = bool(
-            (profile.target_roles or profile.job_title_aliases)
-            and (profile.skills or profile.preferred_locations)
-        )
-        if has_profile_info and is_embedding_valid(job_embedding):
-            # Use pre-computed profile embedding if provided (for batch scoring),
-            # otherwise compute it now
-            if computed_profile_embedding is None:
-                computed_profile_embedding = embed_profile(
-                    target_roles=profile.target_roles + profile.job_title_aliases,
-                    skills=profile.skills,
-                    preferred_locations=profile.preferred_locations,
-                    include_keywords=profile.include_keywords,
-                )
-            if is_embedding_valid(computed_profile_embedding):
-                use_embeddings = True
+        try:
+            from data_collection.embedding import (
+                embed_profile, cosine_similarity, is_embedding_valid,
+            )
+        except ImportError:
+            use_embeddings = False  # keyword-only scoring
+        else:
+            # Only use embeddings if the profile has enough information to embed
+            has_profile_info = bool(
+                (profile.target_roles or profile.job_title_aliases)
+                and (profile.skills or profile.preferred_locations)
+            )
+            if has_profile_info and is_embedding_valid(job_embedding):
+                # Use pre-computed profile embedding if provided (for batch scoring),
+                # otherwise compute it now
+                if computed_profile_embedding is None:
+                    computed_profile_embedding = embed_profile(
+                        target_roles=profile.target_roles + profile.job_title_aliases,
+                        skills=profile.skills,
+                        preferred_locations=profile.preferred_locations,
+                        include_keywords=profile.include_keywords,
+                    )
+                if is_embedding_valid(computed_profile_embedding):
+                    use_embeddings = True
 
     # ── 1. Semantic similarity (80% of total when embeddings available) ──
     semantic_max = 80.0
@@ -1207,10 +1211,14 @@ def score_and_store_matches(
     ).fetchall()
 
     # Pre-compute profile embedding once for all jobs in this batch
-    from data_collection.embedding import embed_profile, is_embedding_valid
+    try:
+        from data_collection.embedding import embed_profile, is_embedding_valid
+    except ImportError:
+        embed_profile = None  # type: ignore[assignment]
+        is_embedding_valid = None  # type: ignore[assignment]
     profile_emb = None
     try:
-        if profile.target_roles or profile.job_title_aliases:
+        if embed_profile is not None and (profile.target_roles or profile.job_title_aliases):
             profile_emb = embed_profile(
                 target_roles=profile.target_roles + profile.job_title_aliases,
                 skills=profile.skills,
