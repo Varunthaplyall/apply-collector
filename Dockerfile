@@ -42,7 +42,7 @@ RUN pip install --no-cache-dir \
         httpx "feedparser>=6.0" "beautifulsoup4>=4.12" "lxml>=5.0" \
         "pydantic>=2.0" "python-dotenv>=1.0" \
         "psycopg2-binary>=2.9" "supabase>=2.0" "flask>=3.0" "pyjwt>=2.9" \
-        "sentence-transformers>=3.0"
+        "sentence-transformers>=3.0" "numpy>=1.24" "tenacity>=8.0"
 
 # ── Pre-download embedding model (baked into image, no runtime download) ─────
 RUN python -c "from sentence_transformers import SentenceTransformer; \
