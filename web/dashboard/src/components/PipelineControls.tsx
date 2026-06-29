@@ -1,12 +1,13 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
-import { triggerCollect, createRunSSE, fetchPipelineStatus } from '@/lib/api'
-import type { PipelineStatus } from '@/lib/api'
+import { triggerCollect, createRunSSE, fetchPipelineStatus, fetchCollectionStatus } from '@/lib/api'
+import type { PipelineStatus, CollectionStatus } from '@/lib/api'
 import { useToast } from '@/lib/ToastContext'
 import {
   Play, Loader2, Terminal, Zap, CheckCircle2, Clock,
   Sparkles, ArrowRight, ChevronDown, ChevronUp, Rocket, Layers,
+  RefreshCw, Database,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -48,9 +49,17 @@ export default function PipelineControls({
   const [result, setResult] = useState<{ inserted: number; existing: number; elapsed: number } | null>(null)
   const [logsExpanded, setLogsExpanded] = useState(false)
   const [currentSource, setCurrentSource] = useState<string | null>(null)
+  const [collectionStatus, setCollectionStatus] = useState<CollectionStatus | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
   const esRef = useRef<EventSource | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ── Fetch collection status on mount ──
+  useEffect(() => {
+    fetchCollectionStatus()
+      .then(setCollectionStatus)
+      .catch(() => { /* silently ignore */ })
+  }, [])
 
   const addLog = useCallback((entry: LogEntry) => {
     setLogs(prev => [...prev, entry])
@@ -232,12 +241,12 @@ export default function PipelineControls({
                 ? 'Scanning across all sources for you…'
                 : done
                 ? 'All done! Your matches are ready to review'
-                : 'Search 9+ job boards at once, scored for your profile'}
+                : 'Job pool auto-refreshes every 4 hours — scored against your profile'}
             </p>
           </div>
         </div>
 
-        {/* Right side: Log toggle + Premium Run Button */}
+        {/* Right side: collection status + optional dev trigger */}
         <div className="flex items-center gap-2.5">
           {logs.length > 0 && (
             <motion.button
@@ -256,63 +265,78 @@ export default function PipelineControls({
             </motion.button>
           )}
 
-          {/* ── The Premium Run Pipeline Button ── */}
-          <motion.button
-            whileHover={profileReady && !running ? { scale: 1.03 } : {}}
-            whileTap={profileReady && !running ? { scale: 0.97 } : {}}
-            onClick={startPipeline}
-            disabled={running || !profileReady}
-            className={cn(
-              'relative inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 font-display text-sm font-bold transition-all duration-300',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-              // Idle state: glossy blue-violet gradient
-              profileReady
-                ? 'bg-gradient-to-r from-brand-blue via-brand-blue to-brand-violet text-white shadow-md shadow-brand-blue/20 hover:shadow-lg hover:shadow-brand-blue/30'
-                : 'bg-muted text-muted-foreground cursor-not-allowed opacity-50',
-              // Running state: pulsing
-              running && 'bg-gradient-to-r from-brand-blue to-brand-violet text-white shadow-lg shadow-brand-violet/25',
-              // Done state: brief emerald
-              done && 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/25',
-            )}
-            title={!profileReady ? 'Set up your profile first' : running ? 'Pipeline is running' : 'Run the collection pipeline'}
-          >
-            {/* Glass overlay */}
-            <div className="absolute inset-0 rounded-xl bg-gradient-to-b from-white/10 to-transparent pointer-events-none" />
-
-            {/* Running: shimmer sweep */}
-            {running && (
-              <motion.div
-                className="absolute inset-0 rounded-xl bg-gradient-to-r from-transparent via-white/8 to-transparent pointer-events-none"
-                animate={{ x: ['-100%', '100%'] }}
-                transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-              />
-            )}
-
-            {/* Running: pulsing ring */}
-            {running && (
-              <motion.div
-                className="absolute -inset-[3px] rounded-xl pointer-events-none border-2 border-brand-blue/30"
-                animate={{ opacity: [0, 1, 0] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-              />
-            )}
-
-            <span className="relative z-10 flex items-center gap-2">
-              {running ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : done ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : (
-                <Rocket className="h-4 w-4" />
-              )}
-              <span>
-                {running ? 'Collecting…'
-                 : done
-                 ? (result ? `+${result.inserted} jobs` : 'Done!')
-                 : 'Run Pipeline'}
+          {/* ── Collection Status (replaces Run Pipeline button in production) ── */}
+          {!running && !done && collectionStatus && (
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary/30 px-3 py-1.5">
+              <Database className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="font-mono text-[11px] font-semibold tabular-nums text-muted-foreground">
+                {collectionStatus.total_jobs.toLocaleString()} jobs
               </span>
-            </span>
-          </motion.button>
+              {collectionStatus.last_run && (
+                <span className="font-mono text-[10px] text-muted-foreground/60">
+                  · {(() => {
+                    const d = new Date(collectionStatus.last_run.run_date)
+                    const mins = Math.round((Date.now() - d.getTime()) / 60000)
+                    if (mins < 1) return 'just now'
+                    if (mins < 60) return `${mins}m ago`
+                    if (mins < 1440) return `${Math.round(mins / 60)}h ago`
+                    return `${Math.round(mins / 1440)}d ago`
+                  })()}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* ── Dev-only: manual Run Pipeline trigger ── */}
+          {import.meta.env.DEV && (
+            <motion.button
+              whileHover={profileReady && !running ? { scale: 1.03 } : {}}
+              whileTap={profileReady && !running ? { scale: 0.97 } : {}}
+              onClick={startPipeline}
+              disabled={running || !profileReady}
+              className={cn(
+                'relative inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 font-display text-sm font-bold transition-all duration-300',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                profileReady
+                  ? 'bg-gradient-to-r from-brand-blue via-brand-blue to-brand-violet text-white shadow-md shadow-brand-blue/20 hover:shadow-lg hover:shadow-brand-blue/30'
+                  : 'bg-muted text-muted-foreground cursor-not-allowed opacity-50',
+                running && 'bg-gradient-to-r from-brand-blue to-brand-violet text-white shadow-lg shadow-brand-violet/25',
+                done && 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/25',
+              )}
+              title={!profileReady ? 'Set up your profile first' : running ? 'Pipeline is running' : 'DEV: Run collection'}
+            >
+              <div className="absolute inset-0 rounded-xl bg-gradient-to-b from-white/10 to-transparent pointer-events-none" />
+              {running && (
+                <motion.div
+                  className="absolute inset-0 rounded-xl bg-gradient-to-r from-transparent via-white/8 to-transparent pointer-events-none"
+                  animate={{ x: ['-100%', '100%'] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                />
+              )}
+              {running && (
+                <motion.div
+                  className="absolute -inset-[3px] rounded-xl pointer-events-none border-2 border-brand-blue/30"
+                  animate={{ opacity: [0, 1, 0] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-2">
+                {running ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : done ? (
+                  <CheckCircle2 className="h-4 w-4" />
+                ) : (
+                  <Rocket className="h-4 w-4" />
+                )}
+                <span>
+                  {running ? 'Collecting…'
+                   : done
+                   ? (result ? `+${result.inserted} jobs` : 'Done!')
+                   : 'Run (Dev)'}
+                </span>
+              </span>
+            </motion.button>
+          )}
         </div>
       </div>
 

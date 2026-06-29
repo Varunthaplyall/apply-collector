@@ -230,6 +230,32 @@ export async function fetchPipelineStatus(): Promise<PipelineStatus> {
   return res.json()
 }
 
+// ── Collection Status API ──────────────────────────────────────────────────
+
+export interface CollectionStatus {
+  last_run: RunRecord | null
+  total_jobs: number
+  new_today: number
+  running: boolean
+}
+
+export async function fetchCollectionStatus(): Promise<CollectionStatus> {
+  const res = await fetch(`${API_BASE}/collection/status`, { headers: authHeaders() })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export interface ProfileStatus {
+  has_profile: boolean
+  profile_id: number | null
+}
+
+export async function fetchProfileStatus(): Promise<ProfileStatus> {
+  const res = await fetch(`${API_BASE}/profile/status`, { headers: authHeaders() })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 // ── History API ───────────────────────────────────────────────────────────
 
 export async function fetchRunHistory(): Promise<RunRecord[]> {

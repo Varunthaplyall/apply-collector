@@ -6,10 +6,7 @@ import NavHeader from './components/NavHeader'
 import ProtectedRoute from './components/ProtectedRoute'
 import PageTransition from './components/PageTransition'
 import ErrorBoundary from './components/ErrorBoundary'
-import DashboardPage from './pages/DashboardPage'
-import JobsPage from './pages/JobsPage'
-import ProfilePage from './pages/ProfilePage'
-import HistoryPage from './pages/HistoryPage'
+import MainPage from './pages/MainPage'
 import LoginPage from './pages/LoginPage'
 
 function AnimatedRoutes() {
@@ -18,7 +15,6 @@ function AnimatedRoutes() {
   return (
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>
-        {/* Public route */}
         <Route
           path="/login"
           element={
@@ -28,43 +24,13 @@ function AnimatedRoutes() {
           }
         />
 
-        {/* Protected routes */}
+        {/* All protected pages → single MainPage */}
         <Route
-          path="/"
+          path="/*"
           element={
             <ProtectedRoute>
               <PageTransition>
-                <DashboardPage />
-              </PageTransition>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/jobs"
-          element={
-            <ProtectedRoute>
-              <PageTransition>
-                <JobsPage />
-              </PageTransition>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/profile"
-          element={
-            <ProtectedRoute>
-              <PageTransition>
-                <ProfilePage />
-              </PageTransition>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/history"
-          element={
-            <ProtectedRoute>
-              <PageTransition>
-                <HistoryPage />
+                <MainPage />
               </PageTransition>
             </ProtectedRoute>
           }
@@ -80,9 +46,11 @@ export default function App() {
       <AuthProvider>
         <ToastProvider>
           <ErrorBoundary>
-            <div className="min-h-screen bg-background bg-grid">
+            <div className="h-screen flex flex-col bg-background bg-grid overflow-hidden">
               <NavHeader />
-              <AnimatedRoutes />
+              <div className="flex-1 min-h-0">
+                <AnimatedRoutes />
+              </div>
             </div>
           </ErrorBoundary>
         </ToastProvider>

@@ -1,6 +1,11 @@
 # ── Render Blueprint ─────────────────────────────────────────────────────────
-# Drop this file in your repo root. When you connect the repo to Render,
-# it auto-detects and provisions the service. No manual config needed.
+# Drop this file in your repo root. Auto-detected when repo is connected.
+#
+# Services:
+#   1. Web (Flask + React SPA) — free-tier Docker container, spins down after
+#      15 min of inactivity. Serves the dashboard and API.
+#   2. Cron (collection) — runs on a schedule, independent of the web service.
+#      Scrapes all job sources into the global pool. Does NOT spin down.
 #
 # Docs: https://render.com/docs/blueprint-spec
 
@@ -24,4 +29,19 @@ services:
       - key: SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: CRON_SECRET
+        sync: false       # optional — only needed if using /api/cron/collect fallback
+
+  - type: cron
+    name: job-collector-cron
+    runtime: docker
+    region: oregon
+    schedule: "0 */4 * * *"   # Every 4 hours (on the hour)
+    dockerCommand: python -m data_collection.run_all_async
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      # Supabase URL needed for auth context (profile lookup during scoring)
+      - key: SUPABASE_URL
         sync: false

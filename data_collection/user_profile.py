@@ -1258,7 +1258,14 @@ def score_and_store_matches(
 
 
 def score_all_new_jobs(profile: CandidateProfile | None = None, user_id: str | None = None) -> int:
-    """Score all jobs not yet matched against the active profile."""
+    """Score all unscored global jobs against the active profile.
+
+    Args:
+        profile: Optional pre-loaded profile. If None, loaded via get_active_profile().
+        user_id: Supabase auth user UUID used to look up the active profile.
+
+    Returns number of jobs scored above the profile's minimum_match_score threshold.
+    """
     if profile is None:
         profile = get_active_profile(user_id=user_id)
     if profile is None:
@@ -1266,6 +1273,7 @@ def score_all_new_jobs(profile: CandidateProfile | None = None, user_id: str | N
         return 0
 
     conn = get_connection()
+
     # Get profile ID
     if user_id:
         row = conn.execute(
@@ -1284,39 +1292,15 @@ def score_all_new_jobs(profile: CandidateProfile | None = None, user_id: str | N
     profile_id = row["id"]
     profile.id = profile_id
 
-    # Find unscored jobs belonging to this user (multi-tenant isolation).
-    # Only score jobs collected by this user — don't leak other users' jobs.
-    profile_user_id = None
-    if user_id:
-        profile_user_id = user_id
-    elif profile.id:
-        # Fallback: look up the user_id from the profile record
-        conn2 = get_connection()
-        p_row = conn2.execute(
-            "SELECT user_id FROM candidate_profiles WHERE id = ?", (profile.id,)
-        ).fetchone()
-        conn2.close()
-        if p_row and p_row.get("user_id"):
-            profile_user_id = p_row["user_id"]
-
-    if profile_user_id:
-        rows = conn.execute(
-            """SELECT j.id FROM jobs j
-               LEFT JOIN profile_job_matches pjm
-                 ON j.id = pjm.job_id AND pjm.profile_id = ?
-               WHERE pjm.job_id IS NULL AND j.user_id = ?
-               ORDER BY j.scraped_at DESC""",
-            (profile_id, profile_user_id),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """SELECT j.id FROM jobs j
-               LEFT JOIN profile_job_matches pjm
-                 ON j.id = pjm.job_id AND pjm.profile_id = ?
-               WHERE pjm.job_id IS NULL
-               ORDER BY j.scraped_at DESC""",
-            (profile_id,),
-        ).fetchall()
+    # Find unscored jobs in the global pool
+    rows = conn.execute(
+        """SELECT j.id FROM jobs j
+           LEFT JOIN profile_job_matches pjm
+             ON j.id = pjm.job_id AND pjm.profile_id = ?
+           WHERE pjm.job_id IS NULL
+           ORDER BY j.scraped_at DESC""",
+        (profile_id,),
+    ).fetchall()
     conn.close()
 
     if not rows:
@@ -1324,8 +1308,37 @@ def score_all_new_jobs(profile: CandidateProfile | None = None, user_id: str | N
         return 0
 
     job_ids = [r["id"] for r in rows]
-    logger.info("Scoring %d new jobs against profile...", len(job_ids))
+    logger.info("Scoring %d new jobs against profile %d...", len(job_ids), profile_id)
     return score_and_store_matches(job_ids, profile)
+
+
+def score_all_new_jobs_for_all_profiles() -> int:
+    """Score all unscored global jobs against every active profile.
+
+    Called after a collection run to update match scores for all users.
+    Returns total number of jobs scored across all profiles.
+    """
+    conn = get_connection()
+    profiles = conn.execute(
+        "SELECT * FROM candidate_profiles WHERE active = 1"
+    ).fetchall()
+    conn.close()
+
+    if not profiles:
+        logger.info("No active profiles — skipping scoring")
+        return 0
+
+    total_scored = 0
+    for row in profiles:
+        profile = CandidateProfile.from_db_row(dict(row))
+        try:
+            scored = score_all_new_jobs(profile=profile, user_id=row.get("user_id"))
+            total_scored += scored
+        except Exception:
+            logger.exception("Failed scoring for profile %d", profile.id)
+
+    logger.info("Scored %d jobs across %d active profiles", total_scored, len(profiles))
+    return total_scored
 
 
 # ──────────────────────────────────────────────────────────────────────────

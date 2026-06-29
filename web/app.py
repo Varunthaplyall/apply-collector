@@ -187,53 +187,41 @@ def _emit(event: str, data: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _get_db_stats(user_id: str | None = None) -> dict:
-    """Gather all dashboard statistics from the database, scoped to user_id.
+def _get_db_stats() -> dict:
+    """Gather all dashboard statistics from the database.
 
-    When user_id is provided, all job counts are filtered to jobs belonging
-    to that user (collected during their pipeline runs).  Jobs with NULL
-    user_id (collected via CLI / before multi-tenancy) are excluded.
+    Job counts are global (shared pool).  Profile-scoped stats
+    (profile_matches, profile_strong) are per-user via profile_job_matches.
     """
     conn = get_connection()
     init_db(conn)
 
-    user_filter = "WHERE user_id = ?" if user_id else ""
-    user_params: tuple = (user_id,) if user_id else ()
-
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM jobs {user_filter}", user_params
-    ).fetchone()[0]
-    unique = conn.execute(
-        f"SELECT COUNT(DISTINCT dedup_key) FROM jobs {user_filter}", user_params
-    ).fetchone()[0]
+    total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    unique = conn.execute("SELECT COUNT(DISTINCT dedup_key) FROM jobs").fetchone()[0]
     duplicates = total - unique
     india_count = conn.execute(
-        f"SELECT COUNT(*) FROM jobs {user_filter} {'AND' if user_id else 'WHERE'} is_india = 1",
-        user_params,
+        "SELECT COUNT(*) FROM jobs WHERE is_india = 1"
     ).fetchone()[0]
 
     # Per-source breakdown
     by_source = {}
     for row in conn.execute(
-        f"SELECT source, COUNT(*) as c FROM jobs {user_filter} GROUP BY source ORDER BY c DESC",
-        user_params,
+        "SELECT source, COUNT(*) as c FROM jobs GROUP BY source ORDER BY c DESC"
     ):
         by_source[row["source"]] = row["c"]
 
     # Top companies
     top_companies = []
     for row in conn.execute(
-        f"SELECT company, COUNT(*) as c FROM jobs {user_filter} GROUP BY company ORDER BY c DESC LIMIT 10",
-        user_params,
+        "SELECT company, COUNT(*) as c FROM jobs GROUP BY company ORDER BY c DESC LIMIT 10"
     ):
         top_companies.append({"company": row["company"], "count": row["c"]})
 
     # Top locations (India)
     top_india_locations = []
     for row in conn.execute(
-        f"SELECT location, COUNT(*) as c FROM jobs {user_filter} {'AND' if user_id else 'WHERE'} is_india = 1 "
-        "GROUP BY location ORDER BY c DESC LIMIT 10",
-        user_params,
+        "SELECT location, COUNT(*) as c FROM jobs WHERE is_india = 1 "
+        "GROUP BY location ORDER BY c DESC LIMIT 10"
     ):
         top_india_locations.append({"location": row["location"], "count": row["c"]})
 
@@ -246,7 +234,7 @@ def _get_db_stats(user_id: str | None = None) -> dict:
 
     # Newest scrape
     newest = conn.execute(
-        f"SELECT MAX(scraped_at) FROM jobs {user_filter}", user_params
+        "SELECT MAX(scraped_at) FROM jobs"
     ).fetchone()[0]
 
     # Today's jobs
@@ -255,8 +243,8 @@ def _get_db_stats(user_id: str | None = None) -> dict:
         try:
             today_start = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             today_jobs = conn.execute(
-                f"SELECT COUNT(*) FROM jobs {user_filter} {'AND' if user_id else 'WHERE'} scraped_at >= ?",
-                user_params + (today_start,),
+                "SELECT COUNT(*) FROM jobs WHERE scraped_at >= ?",
+                (today_start,),
             ).fetchone()[0]
         except Exception:
             pass
@@ -324,20 +312,13 @@ def _get_db_stats(user_id: str | None = None) -> dict:
     }
 
 
-def _get_distinct_values(column: str, table: str = "jobs",
-                          user_id: str | None = None) -> list[str]:
-    """Get distinct values for a column (for filter dropdowns), scoped to user."""
+def _get_distinct_values(column: str, table: str = "jobs") -> list[str]:
+    """Get distinct values for a column (for filter dropdowns)."""
     conn = get_connection()
     init_db(conn)
-    if user_id:
-        rows = conn.execute(
-            f"SELECT DISTINCT {column} FROM {table} WHERE user_id = ? ORDER BY {column}",
-            (user_id,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"SELECT DISTINCT {column} FROM {table} ORDER BY {column}"
-        ).fetchall()
+    rows = conn.execute(
+        f"SELECT DISTINCT {column} FROM {table} ORDER BY {column}"
+    ).fetchall()
     conn.close()
     return [r[column] for r in rows if r[column]]
 
@@ -350,9 +331,8 @@ def _get_distinct_values(column: str, table: str = "jobs",
 @app.route("/api/stats")
 @optional_auth
 def api_stats():
-    """JSON stats endpoint — scoped to the authenticated user's jobs."""
-    user_id = get_current_user()
-    return jsonify(_get_db_stats(user_id=user_id))
+    """JSON stats endpoint — global job pool with per-user profile matches."""
+    return jsonify(_get_db_stats())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -363,8 +343,7 @@ def api_stats():
 @app.route("/api/jobs")
 @optional_auth
 def api_jobs():
-    """JSON jobs listing with filters — scoped to the authenticated user."""
-    user_id = get_current_user()
+    """JSON jobs listing with filters — global job pool with per-user scoring."""
     source_filter = request.args.get("source", "").strip()
     company_filter = request.args.get("company", "").strip()
     location_filter = request.args.get("location", "").strip()
@@ -381,11 +360,6 @@ def api_jobs():
 
     where_clauses: list[str] = []
     params: list = []
-
-    # Multi-tenancy: scope to the user's collected jobs
-    if user_id:
-        where_clauses.append("j.user_id = ?")
-        params.append(user_id)
 
     if source_filter:
         where_clauses.append("j.source = ?")
@@ -472,21 +446,12 @@ def api_jobs():
             params + [per_page, offset],
         ).fetchall()
 
-    sources = _get_distinct_values("source", user_id=user_id)
-    if user_id:
-        companies = [
-            r["company"] for r in conn.execute(
-                "SELECT company, COUNT(*) as c FROM jobs WHERE user_id = ? "
-                "GROUP BY company ORDER BY c DESC LIMIT 200",
-                (user_id,),
-            ).fetchall()
-        ]
-    else:
-        companies = [
-            r["company"] for r in conn.execute(
-                "SELECT company, COUNT(*) as c FROM jobs GROUP BY company ORDER BY c DESC LIMIT 200"
-            ).fetchall()
-        ]
+    sources = _get_distinct_values("source")
+    companies = [
+        r["company"] for r in conn.execute(
+            "SELECT company, COUNT(*) as c FROM jobs GROUP BY company ORDER BY c DESC LIMIT 200"
+        ).fetchall()
+    ]
     conn.close()
 
     return jsonify({
@@ -570,6 +535,22 @@ def api_profile():
     return jsonify(data)
 
 
+@app.route("/api/profile/status")
+@require_auth
+def api_profile_status():
+    """Check if the current user has an active profile with target roles.
+
+    Used by the frontend to determine whether to redirect to onboarding.
+    """
+    user_id = get_current_user()
+    profile = get_active_profile(user_id=user_id)
+    has_profile = bool(profile and profile.target_roles)
+    return jsonify({
+        "has_profile": has_profile,
+        "profile_id": profile.id if profile else None,
+    })
+
+
 @app.route("/api/profile/<int:profile_id>/deactivate", methods=["POST"])
 @require_auth
 def api_profile_deactivate(profile_id: int):
@@ -624,8 +605,8 @@ def api_history():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _run_collection_in_thread(cutshort_limit: int, user_id: str | None = None) -> None:
-    """Run Stage 1 (collection) in a background thread."""
+def _run_collection_in_thread(cutshort_limit: int) -> None:
+    """Run Stage 1 (collection) in a background thread — writes to global job pool."""
     global _run_active
     # Reset per-source pipeline state
     _reset_pipeline_state()
@@ -634,8 +615,8 @@ def _run_collection_in_thread(cutshort_limit: int, user_id: str | None = None) -
         _emit("phase", {"phase": "start", "message": "Starting collection run..."})
         _pipeline_phase_callback("start", "Starting collection run...")
 
-        # Read active profile to scope the search
-        profile = get_active_profile(user_id=user_id)
+        # Use any active profile to scope search queries, but jobs go to global pool
+        profile = get_active_profile(user_id=get_current_user())
         if profile:
             search_roles = profile.target_roles + profile.job_title_aliases
             search_locations = profile.preferred_locations
@@ -683,7 +664,6 @@ def _run_collection_in_thread(cutshort_limit: int, user_id: str | None = None) -
                     search_roles=search_roles,
                     search_locations=search_locations,
                     progress_cb=on_source_progress,
-                    user_id=user_id,
                 )
             )
         finally:
@@ -701,19 +681,18 @@ def _run_collection_in_thread(cutshort_limit: int, user_id: str | None = None) -
             "errors": result.get("errors", []),
         })
 
-        # Score new jobs against active profile
-        if profile and user_id:
-            _emit("phase", {"phase": "scoring", "message": "Scoring jobs against your profile..."})
-            _pipeline_phase_callback("scoring", "Scoring jobs against your profile...")
-            try:
-                from data_collection.user_profile import score_all_new_jobs
-                scored = score_all_new_jobs(user_id=user_id)
-                msg = f"Scored {scored} jobs against your profile"
-                _emit("phase", {"phase": "scoring_complete", "message": msg})
-                _pipeline_phase_callback("scoring_complete", msg)
-            except Exception as exc:
-                logger.exception("Job scoring failed")
-                _emit("error", {"stage": "scoring", "error": str(exc)})
+        # Score new jobs against ALL active profiles
+        _emit("phase", {"phase": "scoring", "message": "Scoring jobs against all active profiles..."})
+        _pipeline_phase_callback("scoring", "Scoring jobs against all active profiles...")
+        try:
+            from data_collection.user_profile import score_all_new_jobs_for_all_profiles
+            scored = score_all_new_jobs_for_all_profiles()
+            msg = f"Scored {scored} matches across active profiles"
+            _emit("phase", {"phase": "scoring_complete", "message": msg})
+            _pipeline_phase_callback("scoring_complete", msg)
+        except Exception as exc:
+            logger.exception("Job scoring failed")
+            _emit("error", {"stage": "scoring", "error": str(exc)})
 
         _emit("phase", {"phase": "complete", "message": "Collection complete."})
         _pipeline_phase_callback("complete", "Collection complete.")
@@ -755,20 +734,13 @@ def _run_normalize_in_thread() -> None:
 
 
 @app.route("/api/run/collect", methods=["POST"])
-@require_auth
 def api_trigger_collect():
-    """Trigger Stage 1: Collection (auth required). Requires a profile with target roles."""
+    """Trigger Stage 1: Collection — writes to global job pool.
+
+    In production, collection runs via Render cron. This endpoint is kept for
+    manual triggering during development / debugging.
+    """
     global _run_active
-
-    user_id = get_current_user()
-
-    # Check that the user has a profile with target roles
-    profile = get_active_profile(user_id=user_id)
-    if not profile or not profile.target_roles:
-        return jsonify({
-            "ok": False,
-            "error": "Set up your profile with target roles before running the pipeline.",
-        }), 400
 
     with _run_lock:
         if _run_active:
@@ -785,7 +757,7 @@ def api_trigger_collect():
     cutshort_limit = 10000  # effectively no limit — collect everything
     thread = threading.Thread(
         target=_run_collection_in_thread,
-        args=(cutshort_limit, user_id),
+        args=(cutshort_limit,),
         daemon=True,
     )
     thread.start()
@@ -873,6 +845,91 @@ def api_auth_me():
     """Return the authenticated user's ID. The frontend calls this to validate
     that a stored token is still valid."""
     return jsonify({"user_id": get_current_user()})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API — Cron collection (called by Render Cron Job or external scheduler)
+# ═══════════════════════════════════════════════════════════════════════════
+
+import hashlib
+import hmac
+import os as _os
+
+
+@app.route("/api/cron/collect", methods=["POST", "GET"])
+def api_cron_collect():
+    """Called by Render Cron Job or external scheduler to run collection.
+
+    Protected by a shared secret (CRON_SECRET env var) via HMAC signature.
+    When called from Render's Cron Job, the cron runs in a separate container
+    and executes ``python -m data_collection.run_all_async`` directly — not
+    this endpoint.  This endpoint exists as a fallback for non-Render setups.
+    """
+    # Shared-secret auth: CRON_SECRET must be set in env vars
+    cron_secret = _os.getenv("CRON_SECRET", "")
+    if cron_secret:
+        # HMAC-based: client sends signature = HMAC-SHA256(secret, timestamp)
+        sig = request.headers.get("X-Cron-Signature", "")
+        ts = request.headers.get("X-Cron-Timestamp", "")
+        if not sig or not ts:
+            return jsonify({"error": "Missing cron auth headers"}), 401
+        expected = hmac.new(
+            cron_secret.encode(), ts.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return jsonify({"error": "Invalid cron signature"}), 401
+    else:
+        # No secret set — allow local dev (but log a warning)
+        logger.warning("CRON_SECRET not set — cron endpoint is unprotected")
+
+    global _run_active
+    with _run_lock:
+        if _run_active:
+            return jsonify({"ok": False, "error": "A run is already in progress"}), 409
+        _run_active = True
+
+    thread = threading.Thread(
+        target=_run_collection_in_thread,
+        args=(10000,),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"ok": True, "message": "Cron collection started"})
+
+
+@app.route("/api/collection/status")
+def api_collection_status():
+    """Show the status of the last collection run and global job pool stats.
+
+    Used by the frontend to show "Last collected X minutes ago" instead
+    of the "Run Pipeline" button.
+    """
+    conn = get_connection()
+    init_db(conn)
+
+    last_run = conn.execute(
+        "SELECT * FROM run_history ORDER BY run_date DESC LIMIT 1"
+    ).fetchone()
+
+    total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    new_today = 0
+    try:
+        today_start = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        new_today = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE scraped_at >= ?",
+            (today_start,),
+        ).fetchone()[0]
+    except Exception:
+        pass
+
+    conn.close()
+
+    return jsonify({
+        "last_run": dict(last_run) if last_run else None,
+        "total_jobs": total_jobs,
+        "new_today": new_today,
+        "running": _run_active,
+    })
 
 
 # ═══════════════════════════════════════════════════════════════════════════

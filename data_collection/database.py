@@ -386,29 +386,14 @@ def init_db(conn=None) -> None:
             scraped_at  TEXT NOT NULL,
             dedup_key   TEXT NOT NULL,
             is_india    INTEGER NOT NULL DEFAULT 0,
-            user_id     UUID,
             embedding   DOUBLE PRECISION[],
-            UNIQUE(source, source_id, user_id)
+            UNIQUE(source, source_id)
         );
 
         CREATE INDEX IF NOT EXISTS idx_jobs_dedup ON jobs(dedup_key);
         CREATE INDEX IF NOT EXISTS idx_jobs_scraped ON jobs(scraped_at);
         CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
         CREATE INDEX IF NOT EXISTS idx_jobs_india ON jobs(is_india);
-
-        -- Migration: add user_id column to existing jobs table (safe for re-runs)
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'jobs' AND column_name = 'user_id'
-            ) THEN
-                ALTER TABLE jobs ADD COLUMN user_id UUID;
-            END IF;
-        END $$;
-
-        -- Index on user_id — only after the column exists
-        CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id);
 
         -- Migration: add embedding column (384-dim double precision[]) for semantic matching
         DO $$
@@ -421,29 +406,42 @@ def init_db(conn=None) -> None:
             END IF;
         END $$;
 
-        -- Migration: drop old 2-column unique constraint, create new 3-column one
+        -- Migration: drop old user_id-based unique constraint, create global one
         DO $$
         DECLARE
             old_constraint text;
         BEGIN
+            -- Drop the old 3-column UNIQUE(source, source_id, user_id) if it exists
             SELECT conname INTO old_constraint
             FROM pg_constraint
             WHERE conrelid = 'jobs'::regclass AND contype = 'u'
-              AND conname LIKE '%source%source_id%'
-              AND conname NOT LIKE '%user_id%';
+              AND conname LIKE '%source%source_id%';
             IF old_constraint IS NOT NULL THEN
                 EXECUTE 'ALTER TABLE jobs DROP CONSTRAINT ' || old_constraint;
             END IF;
-            -- Re-create only if the new one doesn't already exist
+            -- Re-create as global 2-column UNIQUE(source, source_id)
             IF NOT EXISTS (
                 SELECT 1 FROM pg_constraint
                 WHERE conrelid = 'jobs'::regclass AND contype = 'u'
-                  AND conname = 'jobs_source_source_id_user_id_key'
+                  AND conname = 'jobs_source_source_id_key'
             ) THEN
-                ALTER TABLE jobs ADD CONSTRAINT jobs_source_source_id_user_id_key
-                    UNIQUE (source, source_id, user_id);
+                ALTER TABLE jobs ADD CONSTRAINT jobs_source_source_id_key
+                    UNIQUE (source, source_id);
             END IF;
         END $$;
+
+        -- Migration: drop user_id column and its index from legacy schema
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'jobs' AND column_name = 'user_id'
+            ) THEN
+                ALTER TABLE jobs DROP COLUMN IF EXISTS user_id;
+            END IF;
+        END $$;
+
+        DROP INDEX IF EXISTS idx_jobs_user;
 
         CREATE TABLE IF NOT EXISTS classified_jobs (
             id              SERIAL PRIMARY KEY,
@@ -608,12 +606,11 @@ def insert_run_history(conn, stats: dict) -> None:
     conn.commit()
 
 
-def insert_job(conn, job: JobPosting, user_id: str | None = None) -> int | None:
-    """Insert a job posting. Returns the row id (existing or new).
+def insert_job(conn, job: JobPosting) -> int | None:
+    """Insert a job posting into the global pool. Returns the row id (existing or new).
 
-    Uses ON CONFLICT (source, source_id, user_id) DO NOTHING — so if the
-    same user collects the same job twice it's a no-op.  Different users
-    collecting the same job will each get their own row.
+    Uses ON CONFLICT (source, source_id) DO NOTHING — deduplicates globally.
+    All users share the same job pool; personalization happens in profile_job_matches.
 
     Also computes a semantic embedding for the job if not already present.
     Caller is responsible for conn.commit().
@@ -633,9 +630,9 @@ def insert_job(conn, job: JobPosting, user_id: str | None = None) -> int | None:
         """
         INSERT INTO jobs (source, source_id, title, company, location, url,
                           description, salary_range, posted_at, scraped_at,
-                          dedup_key, is_india, user_id, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (source, source_id, user_id) DO NOTHING
+                          dedup_key, is_india, embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (source, source_id) DO NOTHING
         RETURNING id
         """,
         (
@@ -651,7 +648,6 @@ def insert_job(conn, job: JobPosting, user_id: str | None = None) -> int | None:
             job.scraped_at.isoformat(),
             job.dedup_key,
             india_flag,
-            user_id,
             embedding,
         ),
     ).fetchone()

@@ -180,7 +180,7 @@ export default function DashboardPage() {
         )}
       </AnimatePresence>
 
-      {/* Empty state */}
+      {/* Empty state — show when jobs are being collected for the first time */}
       <AnimatePresence>
         {!loading && !error && stats && stats.total === 0 && profileReady && (
           <motion.div
@@ -191,7 +191,7 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3">
               <Sparkles className="h-5 w-5 text-amber-600 dark:text-amber-400" />
               <p className="font-mono text-sm font-medium text-amber-800 dark:text-amber-200">
-                Your job board is empty. Hit <strong>Run Pipeline</strong> below to start collecting jobs tailored to your profile.
+                Your job board is being populated. The collection runs automatically every 4 hours. Check back soon!
               </p>
             </div>
           </motion.div>

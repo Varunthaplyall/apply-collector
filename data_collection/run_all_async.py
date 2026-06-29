@@ -139,7 +139,7 @@ def run_sync_collectors(collectors: list[BaseCollector]) -> list[JobPosting]:
     return all_jobs
 
 
-def persist_jobs(jobs: Sequence[JobPosting], user_id: str | None = None) -> tuple[int, int]:
+def persist_jobs(jobs: Sequence[JobPosting]) -> tuple[int, int]:
     """Write jobs to the database. Returns (inserted, existing)."""
     conn = get_connection()
     init_db(conn)
@@ -148,7 +148,7 @@ def persist_jobs(jobs: Sequence[JobPosting], user_id: str | None = None) -> tupl
 
     for job in jobs:
         try:
-            rid = insert_job(conn, job, user_id=user_id)
+            rid = insert_job(conn, job)
             if rid is not None:
                 inserted += 1
             else:
@@ -172,7 +172,7 @@ async def main_async() -> None:
     logger.info("Phase 1: Async collectors (concurrent) ...")
     async_collectors = _build_async_collectors()
     async_jobs = await run_async_collectors(async_collectors)
-    inserted, existing = persist_jobs(async_jobs, user_id=user_id)
+    inserted, existing = persist_jobs(async_jobs)
     logger.info(
         "Phase 1 done: %d collected, %d new, %d duplicate",
         len(async_jobs), inserted, existing,
@@ -182,19 +182,19 @@ async def main_async() -> None:
     if "--with-browser" in flags or "--all" in flags:
         logger.info("Phase 2: Sync collectors (sequential) ...")
         sync_jobs = run_sync_collectors(SYNC_COLLECTORS)
-        i2, e2 = persist_jobs(sync_jobs, user_id=None)
+        i2, e2 = persist_jobs(sync_jobs)
         logger.info("Phase 2 done: %d collected, %d new, %d duplicate", len(sync_jobs), i2, e2)
         inserted += i2
         existing += e2
 
     elapsed = time.time() - start
 
-    # ── Always score new jobs against active profile ──
+    # ── Always score new jobs against active profiles ──
     try:
-        from data_collection.user_profile import score_all_new_jobs
-        scored = score_all_new_jobs()
+        from data_collection.user_profile import score_all_new_jobs_for_all_profiles
+        scored = score_all_new_jobs_for_all_profiles()
         if scored:
-            logger.info("Scored %d new jobs against active profile", scored)
+            logger.info("Scored %d new jobs across active profiles", scored)
     except Exception:
         logger.exception("Post-collection scoring failed")
 
@@ -358,7 +358,6 @@ async def run_collection(
     search_roles: list[str] | None = None,
     search_locations: list[str] | None = None,
     progress_cb: Callable | None = None,
-    user_id: str | None = None,
 ) -> dict:
     """Run all collectors. Returns result dict.
 
@@ -370,12 +369,10 @@ async def run_collection(
         progress_cb: Optional callback for per-source progress:
                      cb(source_name, status, jobs_found=0, error=None)
                      status ∈ {"running", "completed", "error"}
-        user_id: Supabase auth user UUID — tags collected jobs for multi-tenancy.
-                 None for CLI/scripted runs (jobs are global).
 
     Returns:
         {
-            "inserted": int,     # new jobs added
+            "inserted": int,     # new jobs added to global pool
             "existing": int,     # duplicates skipped
             "elapsed": float,    # seconds
             "errors": [str],     # collector error messages
@@ -420,17 +417,17 @@ async def run_collection(
                 len(async_jobs), before_filter, filtered_out,
             )
 
-    inserted, existing = persist_jobs(async_jobs, user_id=user_id)
+    inserted, existing = persist_jobs(async_jobs)
     total_inserted += inserted
     total_existing += existing
 
-    # ── Always score new jobs against active profile ──
+    # ── Always score new jobs against active profiles ──
     scored_count = 0
     try:
-        from data_collection.user_profile import score_all_new_jobs
-        scored_count = score_all_new_jobs()
+        from data_collection.user_profile import score_all_new_jobs_for_all_profiles
+        scored_count = score_all_new_jobs_for_all_profiles()
         if scored_count:
-            logger.info("Scored %d new jobs against active profile", scored_count)
+            logger.info("Scored %d new jobs across active profiles", scored_count)
     except Exception as exc:
         errors.append(f"scoring: {exc}")
         logger.exception("Post-collection scoring failed")

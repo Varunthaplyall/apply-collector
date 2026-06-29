@@ -68,6 +68,10 @@ start.sh                   — top-level convenience: launches web backend + fro
 
 ## Key Design Decisions
 
+- **Global job pool** — jobs table has no `user_id`; `UNIQUE(source, source_id)` globally. All users share the same pool. Personalization happens in `profile_job_matches` via per-profile scoring.
+- **Cron-based collection** — Render Cron Job runs `python -m data_collection.run_all_async` every 4 hours. No user-triggered pipeline in production. The `/api/run/collect` endpoint is dev-only.
+- **Collection scores all profiles** — after each cron run, `score_all_new_jobs_for_all_profiles()` scores new jobs against every active profile.
+- **Post-signup onboarding** — `ProtectedRoute` checks `GET /api/profile/status`. Users without an active profile are redirected to `/profile?onboarding=true`.
 - **All collectors produce the same schema** (`JobPosting` pydantic model) — normalization is automatic
 - **No Selenium anywhere** — Playwright only for Workday; prefer direct API discovery
 - **PostgreSQL via Supabase** for zero-infra hosted DB — connection pool (2-20, psycopg2 ThreadedConnectionPool), RealDictCursor
@@ -79,15 +83,14 @@ start.sh                   — top-level convenience: launches web backend + fro
 - **Reject filter** strips non-engineering jobs (driver, cashier, data entry, etc.) and known staffing agencies
 - **Supabase Auth** — JWT validation server-side with PyJWT (HS256, no network call needed)
 - **User-scoped profiles** — candidate_profiles keyed by Supabase user UUID, with job scoring/matching engine and configurable weights
-- **user_id on jobs** — multi-tenant: same job collected by different users gets separate rows via `UNIQUE(source, source_id, user_id)`
 
 ## Database Schema
 
 ```sql
--- Core job storage (multi-tenant: user_id scoping)
+-- Core job storage (global pool — no user_id)
 jobs (id SERIAL PK, source, source_id, title, company, location, url, description,
-      salary_range, posted_at, scraped_at, dedup_key, is_india, user_id UUID)
-      UNIQUE(source, source_id, user_id)
+      salary_range, posted_at, scraped_at, dedup_key, is_india, embedding DOUBLE PRECISION[])
+      UNIQUE(source, source_id)
 
 -- AI classification results
 classified_jobs (id SERIAL PK, job_id FK→jobs, seniority, role_fit, red_flags, company_score, match_score, reasoning)
@@ -134,11 +137,14 @@ playwright install                 # browsers for Workday scraper
 ### Run collection
 
 ```bash
+# Collection runs automatically via Render Cron Job every 4 hours.
+# Manual triggers for local dev / debugging:
 python -m data_collection.run_all_async                   # all no-auth sources concurrently
 python -m data_collection.run_all_async --with-browser    # + Workday (sequential)
 python -m data_collection.run_all_async --cutshort-limit 500   # cap Cutshort
-python -m data_collection.run_all                         # sync (legacy)
-python -m data_collection.run_all --all                   # sync, everything incl. keys
+
+# Or trigger via the API (dev mode):
+curl -X POST http://127.0.0.1:5000/api/run/collect
 ```
 
 ### View & analyze data
