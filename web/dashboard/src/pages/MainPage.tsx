@@ -4,14 +4,16 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { cn, safeUrl, timeAgo, formatNumber } from '@/lib/utils'
 import {
   fetchJobs, type JobsResponse, type Job, type Profile, type Stats,
-  type PipelineStatus, type CollectionStatus,
+  type PipelineStatus, type CollectionStatus, type RunRecord,
 } from '@/lib/api'
 import {
   useStats, useJobs, useProfile, usePipelineStatus,
   useCollectionStatus, useDismissJob, useSaveJob, useSaveProfile,
+  useRunHistory,
 } from '@/lib/queries'
 import { useToast, type ToastType } from '@/lib/ToastContext'
 import { useAuth } from '@/lib/AuthContext'
+import { useAdminMode } from '@/lib/admin'
 import {
   Search, ChevronLeft, ChevronRight, MapPin,
   ExternalLink, Calendar, Briefcase, X,
@@ -19,7 +21,7 @@ import {
   Settings, Sparkles, Target, Database,
   SlidersHorizontal, Layers, TrendingUp,
   Building2, Filter, Home, ListFilter,
-  Loader2, RefreshCw, ArrowUpRight,
+  Loader2, RefreshCw, ArrowUpRight, Clock,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
@@ -67,6 +69,7 @@ const ALL_SOURCES = [
 
 export default function MainPage() {
   const { user } = useAuth()
+  const { isAdmin } = useAdminMode()
   const { addToast } = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -106,6 +109,9 @@ export default function MainPage() {
   const { data: jobsData, isLoading: jobsLoading, error: jobsError, refetch: refetchJobs } = useJobs(filters)
   const { data: profile } = useProfile()
   const { data: collectionStatus } = useCollectionStatus()
+
+  // Warm QueryClient cache so SettingsDrawer opens instantly
+  const { data: runHistory } = useRunHistory()
 
   // Mutations
   const dismissMutation = useDismissJob()
@@ -160,16 +166,31 @@ export default function MainPage() {
         {/* Tabs */}
         <div className="flex-shrink-0 border-b border-border bg-background/80 backdrop-blur-sm px-3 py-1.5">
           <div className="flex items-center justify-between">
-            <Tabs defaultValue="dashboard" onChange={setActiveTab}>
-              <TabList>
-                <Tab id="dashboard">
-                  <Home className="h-3.5 w-3.5" /> Dashboard
-                </Tab>
-                <Tab id="jobs" count={jobsData?.count}>
-                  <ListFilter className="h-3.5 w-3.5" /> Jobs
-                </Tab>
-              </TabList>
-            </Tabs>
+            {isAdmin ? (
+              <Tabs defaultValue="dashboard" onChange={setActiveTab}>
+                <TabList>
+                  <Tab id="dashboard">
+                    <Home className="h-3.5 w-3.5" /> Dashboard
+                  </Tab>
+                  <Tab id="jobs" count={jobsData?.count}>
+                    <ListFilter className="h-3.5 w-3.5" /> Jobs
+                  </Tab>
+                  <Tab id="history">
+                    <Clock className="h-3.5 w-3.5" /> History
+                  </Tab>
+                </TabList>
+              </Tabs>
+            ) : (
+              <div className="flex items-center gap-2">
+                <ListFilter className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-sm font-semibold text-foreground">Jobs</span>
+                {jobsData && (
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {formatNumber(jobsData.count)} results
+                  </span>
+                )}
+              </div>
+            )}
 
             <button
               onClick={() => setSettingsOpen(true)}
@@ -183,13 +204,15 @@ export default function MainPage() {
 
         {/* Tab Content */}
         <div className="flex-1 overflow-y-auto">
-          {activeTab === 'dashboard' ? (
+          {isAdmin && activeTab === 'dashboard' ? (
             <DashboardTab
               stats={stats ?? null}
               statsLoading={statsLoading}
               collectionStatus={collectionStatus ?? null}
               profile={profile ?? null}
             />
+          ) : isAdmin && activeTab === 'history' ? (
+            <HistoryTab runHistory={runHistory ?? []} />
           ) : (
             <JobsTab
               filters={Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, String(v)]))}
@@ -410,6 +433,73 @@ function StatCardSimple({ label, value, icon, color }: {
         <p className="mt-2 text-2xl font-bold text-foreground tabular-nums tracking-tight">{value}</p>
       </CardContent>
     </Card>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// History Tab (admin only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function HistoryTab({ runHistory }: { runHistory: RunRecord[] }) {
+  return (
+    <div className="p-4 lg:p-6 space-y-4 max-w-[1440px] mx-auto">
+      <div>
+        <h1 className="text-xl font-bold text-foreground tracking-tight">Run History</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          {runHistory.length} collection runs recorded
+        </p>
+      </div>
+
+      {runHistory.length === 0 ? (
+        <EmptyState
+          icon={<Clock className="h-8 w-8" />}
+          title="No run history yet"
+          description="Run history appears here after the first collection completes."
+        />
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground">Date</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-muted-foreground">Total</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-muted-foreground">Unique</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-muted-foreground">India</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-muted-foreground">GH</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-muted-foreground">Lever</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-muted-foreground">WD</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-muted-foreground">CS</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runHistory.map((run) => (
+                    <tr key={run.run_date} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-2.5 font-mono text-xs text-foreground whitespace-nowrap">
+                        {new Date(run.run_date).toLocaleDateString('en-IN', {
+                          day: 'numeric', month: 'short', year: 'numeric',
+                          hour: '2-digit', minute: '2-digit',
+                        })}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">{run.total_jobs.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums text-emerald-400">{run.unique_jobs.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">{run.india_jobs.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums text-muted-foreground">{run.gh_jobs.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums text-muted-foreground">{run.lever_jobs.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums text-muted-foreground">{run.workday_jobs.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums text-muted-foreground">{run.cutshort_jobs.toLocaleString()}</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums text-muted-foreground">{run.run_time_s}s</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   )
 }
 
