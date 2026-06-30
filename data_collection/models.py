@@ -22,6 +22,9 @@ class JobSource(str, Enum):
     ARBEITNOW = "arbeitnow"
     HIMALAYAS = "himalayas"
     YC_JOBS = "yc_jobs"
+    JSEARCH = "jsearch"
+    WELLFOUND = "wellfound"
+    IIMJOBS = "iimjobs"
 
 
 class JobPosting(BaseModel):

@@ -104,7 +104,7 @@ class JSearchCollector(BaseCollector):
 
             jobs.append(
                 JobPosting(
-                    source=JobSource.LINKEDIN,  # JSearch aggregates LinkedIn/Indeed
+                    source=JobSource.JSEARCH,  # JSearch aggregates LinkedIn/Indeed
                     source_id=f"js-{job_id}",
                     title=item.get("job_title", ""),
                     company=item.get("employer_name", ""),

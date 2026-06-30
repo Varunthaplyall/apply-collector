@@ -77,6 +77,13 @@ class DatabaseConnection:
       - ``executescript()`` splits multi-statement SQL and runs each.
     """
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def __init__(self, conn):
         self._conn = conn
         self._cur = conn.cursor()
