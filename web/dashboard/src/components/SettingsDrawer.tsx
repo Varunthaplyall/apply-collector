@@ -109,7 +109,7 @@ export default function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
             initial={{ x: 380, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: 380, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
             className="fixed right-0 top-0 z-50 h-full w-[420px] max-w-[92vw] border-l border-border/50 bg-card shadow-2xl overflow-hidden flex flex-col"
           >
             {/* Header */}
