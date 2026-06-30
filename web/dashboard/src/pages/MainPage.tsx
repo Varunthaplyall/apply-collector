@@ -110,7 +110,8 @@ export default function MainPage() {
   const { data: profile } = useProfile()
   const { data: collectionStatus } = useCollectionStatus()
 
-  // Warm QueryClient cache so SettingsDrawer opens instantly
+  // Profile is already prefetched above (line 110) — SettingsDrawer reads from cache
+  // Run history is prefetched for the History tab (admin-only)
   const { data: runHistory } = useRunHistory()
 
   // Mutations
@@ -246,32 +247,10 @@ export default function MainPage() {
       </main>
 
       {/* ── Settings Drawer ────────────────────────────────────────────── */}
-      <AnimatePresence>
-        {settingsOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              onClick={() => setSettingsOpen(false)}
-              className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
-            />
-            <motion.aside
-              initial={{ x: 380, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 380, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-              className="fixed right-0 top-0 z-50 h-full w-[420px] max-w-[92vw] border-l border-border/50 bg-card shadow-2xl overflow-hidden flex flex-col"
-            >
-              <SettingsDrawer
-                open={settingsOpen}
-                onClose={() => setSettingsOpen(false)}
-              />
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
+      <SettingsDrawer
+      	open={settingsOpen}
+      	onClose={() => setSettingsOpen(false)}
+      />
     </div>
   )
 }
