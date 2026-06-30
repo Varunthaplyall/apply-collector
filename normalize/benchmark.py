@@ -10,8 +10,9 @@ import time
 from collections import Counter
 from datetime import datetime
 
-from data_collection.config import DB_PATH, CONFIG_PATH
+from data_collection.config import CONFIG_PATH
 from data_collection.database import get_connection
+
 
 
 def get_source_breakdown(conn):

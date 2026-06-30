@@ -12,7 +12,7 @@ import asyncio
 import logging
 import sys
 import time
-from typing import Callable, Sequence
+from typing import Callable
 
 from data_collection.collectors.base import BaseCollector, AsyncBaseCollector
 from data_collection.collectors.remotive_async import AsyncRemotiveCollector
@@ -25,8 +25,7 @@ from data_collection.collectors.yc_jobs import AsyncYCCollector
 from data_collection.collectors.cutshort import AsyncCutshortCollector
 from data_collection.collectors.linkedin import AsyncLinkedInCollector
 from data_collection.collectors.workday import WorkdayScraper
-from data_collection.database import get_connection, init_db, insert_job, insert_run_history
-from data_collection.models import JobPosting
+from data_collection.database import get_connection, init_db, insert_run_history, persist_jobs
 from datetime import datetime, timezone
 
 logging.basicConfig(
@@ -138,27 +137,6 @@ def run_sync_collectors(collectors: list[BaseCollector]) -> list[JobPosting]:
             logger.exception("Collector %s failed, skipping", collector.source_name)
     return all_jobs
 
-
-def persist_jobs(jobs: Sequence[JobPosting]) -> tuple[int, int]:
-    """Write jobs to the database. Returns (inserted, existing)."""
-    conn = get_connection()
-    init_db(conn)
-    inserted = 0
-    existing = 0
-
-    for job in jobs:
-        try:
-            rid = insert_job(conn, job)
-            if rid is not None:
-                inserted += 1
-            else:
-                existing += 1
-        except Exception:
-            logger.exception("Failed inserting job: %s", job.title[:60])
-
-    conn.commit()
-    conn.close()
-    return inserted, existing
 
 
 async def main_async() -> None:
@@ -272,8 +250,6 @@ def _build_collectors(
 
     # ── Build search queries for parameterizable sources ──
     linkedin_queries = _build_search_queries(roles, locations, default_roles=LINKEDIN_DEFAULT_ROLES)
-    jsearch_queries = roles if roles else JSEARCH_DEFAULT_QUERIES
-    jsearch_locations = locations if locations else JSEARCH_DEFAULT_LOCATIONS
 
     return [
         AsyncRemotiveCollector(),
@@ -341,15 +317,6 @@ def _build_search_queries(
                 seen.add(key)
                 queries.append({"keywords": role, "location": loc})
     return queries
-
-
-def _build_adzuna_terms(roles: list[str]) -> list[str]:
-    """Build Adzuna what_terms from profile roles."""
-    # Adzuna's API expects short search terms
-    if not roles:
-        return []
-    # Take first 8 roles to keep API calls reasonable
-    return [r.lower().strip() for r in roles[:8] if r.strip()]
 
 
 async def run_collection(

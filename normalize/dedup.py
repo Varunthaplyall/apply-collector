@@ -11,7 +11,6 @@ import logging
 import re
 from typing import Sequence
 
-from data_collection.config import DB_PATH
 from data_collection.database import get_connection
 from data_collection.models import JobPosting
 
@@ -49,28 +48,6 @@ REJECT_COMPANY_PATTERNS: list[re.Pattern] = [
 ]
 
 
-def is_rejected(job: JobPosting) -> bool:
-    """Check if a job should be filtered out."""
-    for pattern in REJECT_TITLE_PATTERNS:
-        if pattern.search(job.title):
-            return True
-    for pattern in REJECT_COMPANY_PATTERNS:
-        if pattern.search(job.company):
-            return True
-    return False
-
-
-def normalize_job(job: JobPosting) -> JobPosting:
-    """Clean up a job posting — normalize fields."""
-    # Strip whitespace and truncate description
-    job.title = job.title.strip()
-    job.company = job.company.strip()
-    job.location = job.location.strip()
-    if job.description and len(job.description) > 10000:
-        job.description = job.description[:10000]
-    return job
-
-
 def normalize_title(title: str) -> str:
     """Normalize title for fuzzy matching."""
     import re
@@ -98,50 +75,6 @@ def normalize_location(location: str) -> str:
     location = re.sub(r'\s*,\s*(india|in|us|usa|united states|uk|united kingdom)$', '', location)
     location = re.sub(r'\s+', ' ', location).strip()
     return location
-
-
-def fuzzy_dedup_key(job: JobPosting) -> str:
-    """Generate a fuzzy dedup key for secondary matching."""
-    title = normalize_title(job.title)
-    company = job.company.lower().strip()
-    location = normalize_location(job.location)
-    return f"{title}|{company}|{location}"
-
-
-def deduplicate(jobs: Sequence[JobPosting], fuzzy: bool = True) -> list[JobPosting]:
-    """Remove duplicates from a list based on dedup_key (title+company+location).
-
-    If fuzzy=True, also applies secondary fuzzy matching.
-    """
-    # First pass: exact dedup
-    seen_exact: set[str] = set()
-    result: list[JobPosting] = []
-    for job in jobs:
-        if job.dedup_key not in seen_exact:
-            seen_exact.add(job.dedup_key)
-            result.append(job)
-
-    if not fuzzy:
-        return result
-
-    # Second pass: fuzzy dedup
-    seen_fuzzy: set[str] = set()
-    final: list[JobPosting] = []
-    for job in result:
-        fuzzy_key = fuzzy_dedup_key(job)
-        if fuzzy_key not in seen_fuzzy:
-            seen_fuzzy.add(fuzzy_key)
-            final.append(job)
-
-    exact_removed = len(jobs) - len(result)
-    fuzzy_removed = len(result) - len(final)
-    if exact_removed or fuzzy_removed:
-        logger.info(
-            "Dedup: %d exact, %d fuzzy removed (%d -> %d jobs)",
-            exact_removed, fuzzy_removed, len(jobs), len(final),
-        )
-
-    return final
 
 
 def get_stats(conn=None) -> dict:

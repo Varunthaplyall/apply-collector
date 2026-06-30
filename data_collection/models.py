@@ -7,29 +7,21 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 
 
 class JobSource(str, Enum):
     LINKEDIN = "linkedin"
-    INDEED = "indeed"
     REMOTIVE = "remotive"
     ADZUNA = "adzuna"
     GREENHOUSE = "greenhouse"
     LEVER = "lever"
     WORKDAY = "workday"
-    NAUKRI = "naukri"
-    TCS = "tcs"
-    INFOSYS = "infosys"
-    COGNIZANT = "cognizant"
-    WIPRO = "wipro"
     CUTSHORT = "cutshort"
     REMOTEOK = "remoteok"
     ARBEITNOW = "arbeitnow"
     HIMALAYAS = "himalayas"
     YC_JOBS = "yc_jobs"
-    WELLFOUND = "wellfound"
-    IIMJOBS = "iimjobs"
 
 
 class JobPosting(BaseModel):

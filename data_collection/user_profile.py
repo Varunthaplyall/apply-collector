@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
@@ -24,19 +24,6 @@ logger = logging.getLogger(__name__)
 # Constants / enums
 # ──────────────────────────────────────────────────────────────────────────
 
-EXPERIENCE_LEVELS = ["ENTRY", "MID", "SENIOR", "LEAD", "STAFF", "PRINCIPAL"]
-WORK_TYPES       = ["FULL_TIME", "CONTRACT", "PART_TIME", "INTERNSHIP", "FREELANCE"]
-REMOTE_PREFERENCES = ["REMOTE", "HYBRID", "ON_SITE", "ANY"]
-COMPANY_SIZES     = ["STARTUP", "SMALL", "MID", "LARGE", "ENTERPRISE", "ANY"]
-EDUCATION_LEVELS  = ["HIGH_SCHOOL", "ASSOCIATES", "BACHELORS", "MASTERS", "PHD", "ANY"]
-CURRENCIES        = ["USD", "INR", "EUR", "GBP", "CAD", "AUD"]
-
-# All valid job sources (mirrors JobSource enum from models.py)
-ALL_SOURCES = [
-    "linkedin", "indeed", "remotive", "adzuna", "greenhouse",
-    "lever", "workday", "cutshort", "remoteok", "arbeitnow",
-    "himalayas", "yc_jobs", "wellfound", "iimjobs",
-]
 
 # ──────────────────────────────────────────────────────────────────────────
 # Seniority keyword mapping — used to compare declared level vs job title
@@ -286,39 +273,6 @@ def _normalize_title_to_canonical(title: str) -> set[str]:
     return canonical
 
 
-def _expand_skills(skills: list[str]) -> set[str]:
-    """Expand a skill list to include taxonomy children.
-
-    E.g., ["react"] → {"react", "react.js", "reactjs", "next.js", "redux", ...}
-    """
-    expanded: set[str] = set()
-    for skill in skills:
-        skill_lower = skill.lower().strip()
-        expanded.add(skill_lower)
-        # Check taxonomy
-        if skill_lower in _SKILL_TAXONOMY:
-            expanded.update(s.lower() for s in _SKILL_TAXONOMY[skill_lower])
-    return expanded
-
-
-def _expand_location(locations: list[str]) -> set[str]:
-    """Expand locations to include metro area aliases.
-
-    E.g., ["San Francisco"] → {"san francisco", "bay area", "sf", "san jose", ...}
-    """
-    expanded: set[str] = set()
-    for loc in locations:
-        loc_lower = loc.lower().strip()
-        expanded.add(loc_lower)
-        # Check metro areas
-        for metro, aliases in _METRO_AREAS.items():
-            if loc_lower == metro or loc_lower in aliases:
-                expanded.add(metro)
-                expanded.update(a.lower() for a in aliases)
-                break
-    return expanded
-
-
 def _parse_experience_years(description: str) -> tuple[int, int] | None:
     """Extract required years of experience from job description text.
 
@@ -421,8 +375,19 @@ def _compute_freshness_decay(posted_at: str | None, scraped_at: str | None) -> f
         return 0.5
 
 
-def _get_dismissed_skill_penalty(profile_id: int, job_skills: set[str]) -> float:
+def _get_dismissed_skill_penalty(
+    profile_id: int,
+    job_skills: set[str],
+    dismissed_rows: list[dict] | None = None,
+) -> float:
     """Check if the user has previously dismissed jobs with similar skills.
+
+    Args:
+        profile_id: The profile to check dismissed jobs for.
+        job_skills: Skills extracted from the job being scored.
+        dismissed_rows: Pre-fetched dismissed job rows (title, description).
+            When None, fetches its own connection. Callers that score multiple
+            jobs should pre-fetch once and pass the result to avoid N+1 queries.
 
     Returns a penalty multiplier (0.5-1.0). 1.0 = no penalty.
     """
@@ -430,16 +395,16 @@ def _get_dismissed_skill_penalty(profile_id: int, job_skills: set[str]) -> float
         return 1.0
 
     try:
-        conn = get_connection()
-        # Find dismissed jobs for this profile
-        dismissed_rows = conn.execute(
-            """SELECT j.title, j.description
-             FROM profile_job_matches pjm
-             JOIN jobs j ON j.id = pjm.job_id
-             WHERE pjm.profile_id = ? AND pjm.dismissed = 1""",
-            (profile_id,),
-        ).fetchall()
-        conn.close()
+        if dismissed_rows is None:
+            conn = get_connection()
+            dismissed_rows = conn.execute(
+                """SELECT j.title, j.description
+                 FROM profile_job_matches pjm
+                 JOIN jobs j ON j.id = pjm.job_id
+                 WHERE pjm.profile_id = ? AND pjm.dismissed = 1""",
+                (profile_id,),
+            ).fetchall()
+            conn.close()
 
         if not dismissed_rows:
             return 1.0
@@ -742,26 +707,6 @@ def get_active_profile(user_id: str | None = None) -> CandidateProfile | None:
     return CandidateProfile.from_db_row(dict(row)) if row else None
 
 
-def get_profile(profile_id: int) -> CandidateProfile | None:
-    """Get a profile by id."""
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM candidate_profiles WHERE id = ?", (profile_id,)
-    ).fetchone()
-    conn.close()
-    return CandidateProfile.from_db_row(dict(row)) if row else None
-
-
-def get_all_profiles() -> list[CandidateProfile]:
-    """Return all profiles, newest first."""
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM candidate_profiles ORDER BY id DESC"
-    ).fetchall()
-    conn.close()
-    return [CandidateProfile.from_db_row(dict(r)) for r in rows]
-
-
 def save_profile(profile: CandidateProfile, user_id: str | None = None, profile_id: int | None = None) -> int:
     """Insert or update a profile. Returns the profile id.
 
@@ -842,9 +787,10 @@ def _tokenize(text: str) -> set[str]:
 
 
 def score_job_against_profile(
-    job: dict,  # row: {id, title, company, location, description, source, salary_range, posted_at, scraped_at, embedding}
+    job: dict,
     profile: CandidateProfile,
-    profile_embedding: list[float] | None = None,  # pre-computed to avoid recomputation
+    profile_embedding: list[float] | None = None,
+    dismissed_rows: list[dict] | None = None,
 ) -> tuple[float, list[str]]:
     """Score a job (0-100) against a candidate profile.
 
@@ -1183,7 +1129,8 @@ def score_job_against_profile(
     # ── 9. Dismissal penalty ──
     if profile.id:
         matched_skill_set = set(s.lower() for s in (profile.skills or []))
-        dismissal_penalty = _get_dismissed_skill_penalty(profile.id, matched_skill_set)
+        dismissal_penalty = _get_dismissed_skill_penalty(
+            profile.id, matched_skill_set, dismissed_rows=dismissed_rows)
         if dismissal_penalty < 1.0:
             reasons.append(f"Dismissal penalty: ×{dismissal_penalty:.2f}")
             raw_score *= dismissal_penalty
@@ -1210,6 +1157,21 @@ def score_and_store_matches(
         list(job_ids),
     ).fetchall()
 
+    # Pre-fetch dismissed job data once — avoids N+1 connection opens in the
+    # inner scoring loop where _get_dismissed_skill_penalty is called per job.
+    dismissed_rows: list[dict] = []
+    if profile.id:
+        try:
+            dismissed_rows = conn.execute(
+                """SELECT j.title, j.description
+                   FROM profile_job_matches pjm
+                   JOIN jobs j ON j.id = pjm.job_id
+                   WHERE pjm.profile_id = ? AND pjm.dismissed = 1""",
+                (profile.id,),
+            ).fetchall()
+        except Exception:
+            dismissed_rows = []
+
     # Pre-compute profile embedding once for all jobs in this batch
     try:
         from data_collection.embedding import embed_profile, is_embedding_valid
@@ -1233,7 +1195,11 @@ def score_and_store_matches(
     good = 0
     for row in rows:
         job_dict = dict(row)
-        score, reasons = score_job_against_profile(job_dict, profile, profile_embedding=profile_emb)
+        score, reasons = score_job_against_profile(
+            job_dict, profile,
+            profile_embedding=profile_emb,
+            dismissed_rows=dismissed_rows,
+        )
 
         conn.execute(
             """INSERT INTO profile_job_matches
@@ -1339,48 +1305,6 @@ def score_all_new_jobs_for_all_profiles() -> int:
 
     logger.info("Scored %d jobs across %d active profiles", total_scored, len(profiles))
     return total_scored
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Filter-aware collection helpers
-# ──────────────────────────────────────────────────────────────────────────
-
-def get_enabled_sources(user_id: str | None = None) -> list[str]:
-    """Return which job sources should run based on profile preferences.
-
-    If profile has preferred_sources, return those. Otherwise return all.
-    """
-    profile = get_active_profile(user_id=user_id)
-    if profile and profile.preferred_sources:
-        return [s for s in profile.preferred_sources if s in ALL_SOURCES]
-    return ALL_SOURCES
-
-
-def get_search_keywords(user_id: str | None = None) -> list[str]:
-    """Return search keywords derived from the profile for API-based collectors."""
-    profile = get_active_profile(user_id=user_id)
-    if not profile:
-        return []
-
-    keywords = list(profile.target_roles)
-    keywords.extend(profile.job_title_aliases)
-    keywords.extend(profile.include_keywords)
-    # Deduplicate and prioritize
-    seen = set()
-    result = []
-    for kw in keywords:
-        if kw.lower() not in seen:
-            seen.add(kw.lower())
-            result.append(kw)
-    return result
-
-
-def get_location_filters(user_id: str | None = None) -> list[str]:
-    """Return search locations derived from the profile."""
-    profile = get_active_profile(user_id=user_id)
-    if not profile:
-        return []
-    return profile.preferred_locations
 
 
 # ──────────────────────────────────────────────────────────────────────────

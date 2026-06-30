@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import time
-from typing import Sequence
 
 from dotenv import load_dotenv
 
@@ -23,7 +22,7 @@ from data_collection.collectors.workday import WorkdayScraper
 from data_collection.collectors.lever import LeverCollector
 from data_collection.collectors.cutshort import CutshortCollector
 from data_collection.collectors.base import BaseCollector
-from data_collection.database import get_connection, init_db, insert_job
+from data_collection.database import persist_jobs
 from data_collection.models import JobPosting
 
 load_dotenv()
@@ -87,27 +86,6 @@ def run_collectors(collectors: list[BaseCollector]) -> list[JobPosting]:
             logger.exception("Collector %s failed, skipping", collector.source_name)
     return all_jobs
 
-
-def persist_jobs(jobs: Sequence[JobPosting]) -> tuple[int, int]:
-    """Write jobs to the database. Returns (inserted, existing)."""
-    conn = get_connection()
-    init_db(conn)
-    inserted = 0
-    existing = 0
-
-    for job in jobs:
-        try:
-            rid = insert_job(conn, job)
-            if rid is not None:
-                inserted += 1
-            else:
-                existing += 1
-        except Exception:
-            logger.exception("Failed inserting job: %s", job.title[:60])
-
-    conn.commit()
-    conn.close()
-    return inserted, existing
 
 
 def main() -> None:

@@ -12,10 +12,8 @@ Schema:
 import logging
 import re
 import threading
-from pathlib import Path
 from typing import Optional
 
-import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 
@@ -83,11 +81,6 @@ class DatabaseConnection:
         self._conn = conn
         self._cur = conn.cursor()
         self._lastrowid: Optional[int] = None
-
-    @property
-    def lastrowid(self) -> Optional[int]:
-        """The id returned by the last INSERT ... RETURNING id statement."""
-        return self._lastrowid
 
     def execute(self, sql: str, params=None):
         """Execute SQL, automatically converting ? → %s placeholders."""
@@ -217,7 +210,7 @@ def _split_sql_statements(sql: str) -> list[str]:
     return statements
 
 
-def get_connection(db_path: Optional[Path] = None) -> DatabaseConnection:
+def get_connection() -> DatabaseConnection:
     """Get a database connection from the connection pool."""
     conn = _get_pool().getconn()
     return DatabaseConnection(conn)
@@ -366,8 +359,29 @@ def is_india_location(location: str) -> bool:
     return False
 
 
+_db_initialized: bool = False
+_db_init_lock = threading.Lock()
+
+
+def ensure_db() -> None:
+    """Call init_db() once per process lifetime. Safe to call from any thread."""
+    global _db_initialized
+    if _db_initialized:
+        return
+    with _db_init_lock:
+        if _db_initialized:
+            return
+        init_db()
+        _db_initialized = True
+
+
 def init_db(conn=None) -> None:
-    """Create tables if they do not exist (PostgreSQL syntax)."""
+    """Create tables if they do not exist (PostgreSQL syntax).
+
+    Prefer calling ensure_db() instead — it gates redundant calls behind a
+    process-level flag.  Call init_db() directly only when you need a fresh
+    connection to ensure the schema (e.g. from the CLI entry points).
+    """
     close = conn is None
     conn = conn or get_connection()
 
@@ -394,6 +408,9 @@ def init_db(conn=None) -> None:
         CREATE INDEX IF NOT EXISTS idx_jobs_scraped ON jobs(scraped_at);
         CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
         CREATE INDEX IF NOT EXISTS idx_jobs_india ON jobs(is_india);
+        CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company);
+        CREATE INDEX IF NOT EXISTS idx_jobs_source_scraped ON jobs(source, scraped_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_india_scraped ON jobs(is_india, scraped_at DESC);
 
         -- Migration: add embedding column (384-dim double precision[]) for semantic matching
         DO $$
@@ -406,28 +423,23 @@ def init_db(conn=None) -> None:
             END IF;
         END $$;
 
-        -- Migration: drop old user_id-based unique constraint, create global one
+        -- Migration: drop old user_id-based unique constraint, create global one.
+        -- Use explicit constraint names (DROP IF EXISTS) instead of LIKE patterns
+        -- to avoid accidentally matching the new constraint on re-runs.
         DO $$
-        DECLARE
-            old_constraint text;
         BEGIN
-            -- Drop the old 3-column UNIQUE(source, source_id, user_id) if it exists
-            SELECT conname INTO old_constraint
-            FROM pg_constraint
-            WHERE conrelid = 'jobs'::regclass AND contype = 'u'
-              AND conname LIKE '%source%source_id%';
-            IF old_constraint IS NOT NULL THEN
-                EXECUTE 'ALTER TABLE jobs DROP CONSTRAINT ' || old_constraint;
-            END IF;
-            -- Re-create as global 2-column UNIQUE(source, source_id)
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_constraint
-                WHERE conrelid = 'jobs'::regclass AND contype = 'u'
-                  AND conname = 'jobs_source_source_id_key'
-            ) THEN
-                ALTER TABLE jobs ADD CONSTRAINT jobs_source_source_id_key
-                    UNIQUE (source, source_id);
-            END IF;
+            ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_source_source_id_user_id_key;
+        EXCEPTION WHEN undefined_table THEN
+            -- jobs table does not exist yet (first run)
+            NULL;
+        END $$;
+        DO $$
+        BEGIN
+            ALTER TABLE jobs ADD CONSTRAINT jobs_source_source_id_key
+                UNIQUE (source, source_id);
+        EXCEPTION WHEN duplicate_table THEN
+            -- constraint already exists
+            NULL;
         END $$;
 
         -- Migration: drop user_id column and its index from legacy schema
@@ -466,6 +478,10 @@ def init_db(conn=None) -> None:
         CREATE INDEX IF NOT EXISTS idx_heuristic_result
         ON heuristic_results(result);
 
+        -- Classified jobs role_fit index — used by stats queries
+        CREATE INDEX IF NOT EXISTS idx_classified_role_fit
+        ON classified_jobs(role_fit);
+
         CREATE TABLE IF NOT EXISTS applications (
             id          SERIAL PRIMARY KEY,
             job_id      INTEGER NOT NULL REFERENCES jobs(id),
@@ -475,6 +491,8 @@ def init_db(conn=None) -> None:
             letter_path TEXT,
             notes       TEXT
         );
+
+        CREATE INDEX IF NOT EXISTS idx_applications_job ON applications(job_id);
 
         CREATE TABLE IF NOT EXISTS generated_assets (
             job_id       INTEGER PRIMARY KEY REFERENCES jobs(id),
@@ -551,6 +569,9 @@ def init_db(conn=None) -> None:
             ON profile_job_matches(job_id);
         CREATE INDEX IF NOT EXISTS idx_profile_matches_score
             ON profile_job_matches(profile_id, score DESC);
+        CREATE INDEX IF NOT EXISTS idx_profile_matches_dismissed
+            ON profile_job_matches(profile_id, dismissed)
+            WHERE dismissed = 1;
 
         CREATE TABLE IF NOT EXISTS run_history (
             id             SERIAL PRIMARY KEY,
@@ -654,13 +675,6 @@ def insert_job(conn, job: JobPosting) -> int | None:
     return row["id"] if row else None
 
 
-def job_exists(conn, source: str, source_id: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM jobs WHERE source = ? AND source_id = ?",
-        (source, source_id),
-    ).fetchone() is not None
-
-
 def update_job_embedding(conn, job_id: int, embedding: list[float]) -> None:
     """Store an embedding vector for a job row.
 
@@ -687,17 +701,30 @@ def get_jobs_without_embeddings(conn, limit: int = 1000) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_job_embeddings(conn, job_ids: list[int]) -> dict[int, list[float] | None]:
-    """Fetch embeddings for a list of job IDs. Returns {job_id: [float, ...]}."""
-    if not job_ids:
-        return {}
-    from data_collection.embedding import embedding_from_db
-    placeholders = ",".join("?" for _ in job_ids)
-    rows = conn.execute(
-        f"SELECT id, embedding FROM jobs WHERE id IN ({placeholders})",
-        list(job_ids),
-    ).fetchall()
-    result: dict[int, list[float] | None] = {}
-    for row in rows:
-        result[row["id"]] = embedding_from_db(row.get("embedding"))
-    return result
+def persist_jobs(jobs: list) -> tuple[int, int]:
+    """Write jobs to the database. Returns (inserted, existing).
+
+    Opens its own connection and commits. This is the single shared
+    implementation used by both the sync and async orchestrators.
+    """
+    if not jobs:
+        return 0, 0
+
+    conn = get_connection()
+    init_db(conn)
+    inserted = 0
+    existing = 0
+
+    for job in jobs:
+        try:
+            rid = insert_job(conn, job)
+            if rid is not None:
+                inserted += 1
+            else:
+                existing += 1
+        except Exception:
+            logger.exception("Failed inserting job: %s", job.title[:60])
+
+    conn.commit()
+    conn.close()
+    return inserted, existing

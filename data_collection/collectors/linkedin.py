@@ -130,14 +130,6 @@ def _parse_linkedin_job_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:12]
 
 
-def _clean_html(html_text: str) -> str:
-    """Strip HTML tags and normalize whitespace."""
-    if not html_text:
-        return ""
-    soup = BeautifulSoup(html_text, "html.parser")
-    text = soup.get_text(separator=" ")
-    return re.sub(r"\s+", " ", text).strip()
-
 
 class AsyncLinkedInCollector(AsyncBaseCollector):
     """Collect jobs from LinkedIn's guest job search API.

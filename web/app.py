@@ -19,15 +19,18 @@ API:
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
+import os as _os
 import queue
 import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 
 # Ensure the project root is on sys.path so data_collection imports work
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,12 +42,9 @@ from data_collection.database import get_connection, init_db
 from data_collection.user_profile import (
     CandidateProfile,
     get_active_profile,
-    get_all_profiles,
-    get_profile,
     save_profile,
     deactivate_profile,
     score_all_new_jobs,
-    get_enabled_sources,
     dismiss_job,
     save_job,
 )
@@ -194,7 +194,6 @@ def _get_db_stats() -> dict:
     (profile_matches, profile_strong) are per-user via profile_job_matches.
     """
     conn = get_connection()
-    init_db(conn)
 
     total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
     unique = conn.execute("SELECT COUNT(DISTINCT dedup_key) FROM jobs").fetchone()[0]
@@ -247,7 +246,7 @@ def _get_db_stats() -> dict:
                 (today_start,),
             ).fetchone()[0]
         except Exception:
-            pass
+            logger.debug("Failed to count today's jobs", exc_info=True)
 
     # Classification stats (if available)
     classified = 0
@@ -264,7 +263,7 @@ def _get_db_stats() -> dict:
             "SELECT COUNT(*) FROM classified_jobs WHERE role_fit = 'GOOD'"
         ).fetchone()[0]
     except Exception:
-        pass
+        logger.debug("Failed to fetch classification stats", exc_info=True)
 
     # Profile match stats (scoped to the user's active profile)
     profile_matches = 0
@@ -288,7 +287,7 @@ def _get_db_stats() -> dict:
                 (profile_id,),
             ).fetchone()[0]
         except Exception:
-            pass
+            logger.debug("Failed to fetch profile match stats", exc_info=True)
 
     conn.close()
 
@@ -312,12 +311,23 @@ def _get_db_stats() -> dict:
     }
 
 
+# Whitelist of safe column/table names for _get_distinct_values
+_DISTINCT_COLUMNS = {"source", "company", "location"}
+_DISTINCT_TABLES = {"jobs"}
+
+
 def _get_distinct_values(column: str, table: str = "jobs") -> list[str]:
-    """Get distinct values for a column (for filter dropdowns)."""
+    """Get distinct values for a column (for filter dropdowns).
+
+    Uses a whitelist to prevent SQL injection through column/table names.
+    """
+    if column not in _DISTINCT_COLUMNS:
+        raise ValueError(f"Invalid column: {column}")
+    if table not in _DISTINCT_TABLES:
+        raise ValueError(f"Invalid table: {table}")
     conn = get_connection()
-    init_db(conn)
     rows = conn.execute(
-        f"SELECT DISTINCT {column} FROM {table} ORDER BY {column}"
+        f'SELECT DISTINCT "{column}" FROM {table} ORDER BY "{column}"'
     ).fetchall()
     conn.close()
     return [r[column] for r in rows if r[column]]
@@ -356,7 +366,6 @@ def api_jobs():
     per_page = 50
 
     conn = get_connection()
-    init_db(conn)
 
     where_clauses: list[str] = []
     params: list = []
@@ -592,7 +601,6 @@ def api_save_job(job_id: int):
 def api_history():
     """JSON run history."""
     conn = get_connection()
-    init_db(conn)
     rows = conn.execute(
         "SELECT * FROM run_history ORDER BY run_date DESC"
     ).fetchall()
@@ -734,6 +742,7 @@ def _run_normalize_in_thread() -> None:
 
 
 @app.route("/api/run/collect", methods=["POST"])
+@require_auth
 def api_trigger_collect():
     """Trigger Stage 1: Collection — writes to global job pool.
 
@@ -847,13 +856,7 @@ def api_auth_me():
     return jsonify({"user_id": get_current_user()})
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# API — Cron collection (called by Render Cron Job or external scheduler)
-# ═══════════════════════════════════════════════════════════════════════════
-
-import hashlib
-import hmac
-import os as _os
+# ── Cron collection (called by Render Cron Job or external scheduler) ──────
 
 
 @app.route("/api/cron/collect", methods=["POST", "GET"])
@@ -905,7 +908,6 @@ def api_collection_status():
     of the "Run Pipeline" button.
     """
     conn = get_connection()
-    init_db(conn)
 
     last_run = conn.execute(
         "SELECT * FROM run_history ORDER BY run_date DESC LIMIT 1"

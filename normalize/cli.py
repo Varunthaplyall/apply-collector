@@ -25,10 +25,9 @@ Usage:
 import json
 import logging
 import sys
-import textwrap
+
 from typing import Optional
 
-from data_collection.config import DB_PATH
 from data_collection.database import get_connection
 from normalize.dedup import print_stats
 

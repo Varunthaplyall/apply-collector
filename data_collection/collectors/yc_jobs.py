@@ -196,7 +196,6 @@ class AsyncYCCollector(AsyncBaseCollector):
                         continue
 
                     text = _strip_html(raw_text)
-                    author = comment.get("author", "")
 
                     # Filter to engineering roles
                     if not _is_engineering_role(text):

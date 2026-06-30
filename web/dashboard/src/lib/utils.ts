@@ -16,6 +16,13 @@ export function formatPercent(part: number, total: number): string {
   return `${((part / total) * 100).toFixed(1)}%`
 }
 
+/** Reject dangerous URL schemes (javascript:, data:) that could enable XSS
+ *  when rendered in <a href>.  Falls back to '#' for unsafe URLs. */
+export function safeUrl(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url
+  return '#'
+}
+
 export function timeAgo(dateStr: string): string {
   const date = new Date(dateStr)
   const now = new Date()

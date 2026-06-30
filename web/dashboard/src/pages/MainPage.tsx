@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { cn, timeAgo } from '@/lib/utils'
+import { cn, safeUrl, timeAgo } from '@/lib/utils'
 import {
   fetchJobs, JobsResponse, Job, dismissJob, saveJob,
   fetchCollectionStatus, CollectionStatus,
@@ -332,7 +332,7 @@ function JobCard({ job, index, scoreColor, scoreBg, isDismissed, isSaved, onDism
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <a href={job.url} target="_blank" rel="noopener noreferrer"
+            <a href={safeUrl(job.url)} target="_blank" rel="noopener noreferrer"
               className="font-sans text-[13px] font-semibold text-foreground hover:text-primary truncate">
               {job.title}
             </a>
@@ -361,7 +361,7 @@ function JobCard({ job, index, scoreColor, scoreBg, isDismissed, isSaved, onDism
             className={cn('rounded p-1', isDismissed ? 'bg-red-500/10 text-red-400' : 'text-muted-foreground/30 hover:text-red-400 hover:bg-red-500/5')}>
             {isDismissed ? <X className="h-3 w-3" /> : <ThumbsDown className="h-3 w-3" />}
           </button>
-          <a href={job.url} target="_blank" rel="noopener noreferrer"
+          <a href={safeUrl(job.url)} target="_blank" rel="noopener noreferrer"
             className="rounded p-1 text-muted-foreground/30 hover:text-foreground hover:bg-muted">
             <ExternalLink className="h-3 w-3" />
           </a>

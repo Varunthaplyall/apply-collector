@@ -80,14 +80,6 @@ export async function triggerCollect(): Promise<TriggerResponse> {
   return res.json()
 }
 
-export async function triggerNormalize(): Promise<TriggerResponse> {
-  const res = await fetch(`${API_BASE}/run/normalize`, {
-    method: 'POST',
-    headers: authHeaders(),
-  })
-  return res.json()
-}
-
 export function createRunSSE(
   onPhase: (data: { phase: string; message: string }) => void,
   onResult: (data: Record<string, unknown>) => void,

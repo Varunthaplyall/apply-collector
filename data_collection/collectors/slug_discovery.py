@@ -111,18 +111,4 @@ async def discover_slug(
     return result
 
 
-async def discover_slugs_batch(
-    companies: list[str],
-    check_greenhouse: bool = True,
-    check_lever: bool = True,
-    concurrency: int = 10,
-) -> list[dict]:
-    """Discover slugs for a batch of companies concurrently."""
-    semaphore = asyncio.Semaphore(concurrency)
 
-    async def _discover(name: str) -> dict:
-        async with semaphore:
-            return await discover_slug(name, check_greenhouse, check_lever)
-
-    tasks = [_discover(name) for name in companies]
-    return await asyncio.gather(*tasks)

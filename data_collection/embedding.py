@@ -18,7 +18,7 @@ Key design decisions:
 from __future__ import annotations
 
 import logging
-import math
+
 import threading
 from typing import Optional, Sequence
 
@@ -186,33 +186,6 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     # Clamp to [0, 1] to handle floating-point noise
     return max(0.0, min(1.0, dot))
-
-
-def batch_cosine_similarity(
-    query: list[float],
-    candidates: list[list[float]],
-) -> list[float]:
-    """Compute cosine similarity of a query vector against multiple candidates.
-
-    Uses numpy for vectorized computation.
-    """
-    if not candidates:
-        return []
-    q = np.array(query, dtype=np.float32)
-    c = np.array(candidates, dtype=np.float32)
-    # Both are normalized, so dot product = cosine similarity
-    scores = np.dot(c, q)
-    return [max(0.0, min(1.0, float(s))) for s in scores]
-
-
-def embedding_to_db(value: list[float] | None) -> str | None:
-    """Convert an embedding list to a PostgreSQL array literal.
-
-    Example: [0.1, 0.2, 0.3] → '{0.1,0.2,0.3}'
-    """
-    if value is None:
-        return None
-    return "{" + ",".join(str(v) for v in value) + "}"
 
 
 def embedding_from_db(value: str | list[float] | None) -> list[float] | None:

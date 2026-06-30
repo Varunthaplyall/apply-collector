@@ -93,12 +93,15 @@ def decode_token(token: str) -> Optional[dict]:
     try:
         # Get the signing key from JWKS (matches kid in token header to JWKS key)
         signing_key = client.get_signing_key_from_jwt(token)
+        # Validate audience: should match the Supabase project reference.
+        # Supabase JWTs include `aud: "authenticated"` as the default audience.
+        # We verify this to reject tokens from other Supabase projects.
         payload = pyjwt.decode(
             token,
             signing_key.key,
             algorithms=["ES256"],
+            audience="authenticated",
             options={
-                "verify_aud": False,
                 "require": ["exp", "sub"],
             },
         )
