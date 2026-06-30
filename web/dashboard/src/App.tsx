@@ -1,6 +1,16 @@
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './lib/AuthContext'
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+})
 import { ToastProvider } from './lib/ToastContext'
 import NavHeader from './components/NavHeader'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -45,14 +55,17 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
-          <ErrorBoundary>
-            <div className="h-screen flex flex-col bg-background bg-grid overflow-hidden">
-              <NavHeader />
-              <div className="flex-1 min-h-0">
-                <AnimatedRoutes />
+          <QueryClientProvider client={queryClient}>
+            <ErrorBoundary>
+              <div className="h-screen flex flex-col bg-background bg-grid overflow-hidden">
+                <a href="#main-content" className="skip-to-content">Skip to content</a>
+                <NavHeader />
+                <div className="flex-1 min-h-0" id="main-content">
+                  <AnimatedRoutes />
+                </div>
               </div>
-            </div>
-          </ErrorBoundary>
+            </ErrorBoundary>
+          </QueryClientProvider>
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

@@ -124,10 +124,13 @@ export interface JobsResponse {
   companies: string[]
 }
 
-export async function fetchJobs(filters: Record<string, string | number | undefined> = {}): Promise<JobsResponse> {
+export async function fetchJobs(
+  filters: Record<string, string | number | undefined> = {},
+  signal?: AbortSignal,
+): Promise<JobsResponse> {
   const params = new URLSearchParams()
   Object.entries(filters).forEach(([k, v]) => { if (v !== undefined && v !== '') params.set(k, String(v)) })
-  const res = await fetch(`${API_BASE}/jobs?${params}`, { headers: authHeaders() })
+  const res = await fetch(`${API_BASE}/jobs?${params}`, { headers: authHeaders(), signal })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }

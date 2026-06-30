@@ -5,9 +5,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Design Tokens
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 @layer base {
   :root {
-    /* ── Dark-only palette ─────────────────────────────────────────── */
+    /* ── Palette (dark-only) ───────────────────────────────────────────── */
     --background: 0 0% 3%;
     --foreground: 0 0% 93%;
     --card: 0 0% 6%;
@@ -27,9 +31,8 @@
     --border: 0 0% 11%;
     --input: 0 0% 11%;
     --ring: 224 76% 48%;
-    --radius: 0.625rem;
 
-    /* Extended palette */
+    /* ── Brand colors ──────────────────────────────────────────────────── */
     --brand-blue: 217 91% 60%;
     --brand-violet: 250 95% 70%;
     --brand-emerald: 160 60% 45%;
@@ -37,25 +40,55 @@
     --brand-rose: 350 80% 55%;
     --brand-cyan: 189 80% 48%;
     --brand-indigo: 239 70% 65%;
+
+    /* ── Semantic tokens ───────────────────────────────────────────────── */
+    --color-success: 160 84% 39%;
+    --color-warning: 38 92% 50%;
+    --color-danger: 0 72% 51%;
+    --color-info: 217 91% 60%;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Base Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 @layer base {
   * {
     @apply border-border;
   }
 
+  html {
+    @apply antialiased;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background text-foreground;
     font-feature-settings: 'rlig' 1, 'calt' 1, 'ss01' 1;
   }
 
   ::selection {
     @apply bg-primary/20 text-foreground;
   }
+
+  /* Focus ring — visible only on keyboard focus */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring/50 ring-offset-2 ring-offset-background;
+  }
+
+  /* Skip-to-content link */
+  .skip-to-content {
+    @apply absolute -top-10 left-4 z-[100] rounded-md bg-primary px-4 py-2 text-primary-foreground
+           transition-all focus:top-4;
+  }
 }
 
-/* Custom scrollbar — polished, minimal */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Scrollbar
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -71,22 +104,66 @@
   background: hsl(215 14% 46% / 0.45);
 }
 
-/* Premium gradient meshes */
-.bg-mesh {
-  background:
-    radial-gradient(ellipse 80% 60% at 20% 20%, hsl(var(--brand-blue) / 0.06), transparent 50%),
-    radial-gradient(ellipse 60% 80% at 80% 40%, hsl(var(--brand-violet) / 0.04), transparent 50%),
-    radial-gradient(ellipse 40% 60% at 50% 80%, hsl(var(--brand-cyan) / 0.03), transparent 50%);
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(215 14% 46% / 0.25) transparent;
 }
 
-/* Subtle dot grid */
-.bg-grid {
-  background-image:
-    radial-gradient(hsl(var(--foreground) / 0.04) 1px, transparent 1px);
-  background-size: 28px 28px;
+/* ═══════════════════════════════════════════════════════════════════════════
+   Utility Classes
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer utilities {
+  /* Background textures */
+  .bg-mesh {
+    background:
+      radial-gradient(ellipse 80% 60% at 20% 20%, hsl(var(--brand-blue) / 0.06), transparent 50%),
+      radial-gradient(ellipse 60% 80% at 80% 40%, hsl(var(--brand-violet) / 0.04), transparent 50%),
+      radial-gradient(ellipse 40% 60% at 50% 80%, hsl(var(--brand-cyan) / 0.03), transparent 50%);
+  }
+
+  .bg-grid {
+    background-image:
+      radial-gradient(hsl(var(--foreground) / 0.04) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  /* Gradient text */
+  .text-gradient {
+    background: linear-gradient(135deg, hsl(var(--brand-blue)), hsl(var(--brand-violet)));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-success {
+    background: linear-gradient(135deg, hsl(var(--brand-emerald)), hsl(var(--brand-cyan)));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Glow ring */
+  .glow-ring {
+    box-shadow:
+      0 0 0 1px hsl(var(--ring) / 0.3),
+      0 0 0 4px hsl(var(--ring) / 0.08),
+      0 0 20px -5px hsl(var(--ring) / 0.15);
+  }
+
+  /* Glass effect */
+  .glass {
+    background: hsl(var(--card) / 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
 }
 
-/* Shimmer gradient for skeleton loaders */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Skeleton Shimmer
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .shimmer-bg {
   background: linear-gradient(
     110deg,
@@ -100,30 +177,14 @@
   animation: shimmer-move 2s ease-in-out infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-bg {
+    animation: none;
+    background: hsl(var(--muted));
+  }
+}
+
 @keyframes shimmer-move {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
-}
-
-/* Glow ring for focus states */
-.glow-ring {
-  box-shadow:
-    0 0 0 1px hsl(var(--ring) / 0.3),
-    0 0 0 4px hsl(var(--ring) / 0.08),
-    0 0 20px -5px hsl(var(--ring) / 0.15);
-}
-
-/* Gradient text utility */
-.gradient-text {
-  background: linear-gradient(135deg, hsl(var(--brand-blue)), hsl(var(--brand-violet)));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.gradient-text-emerald {
-  background: linear-gradient(135deg, hsl(var(--brand-emerald)), hsl(var(--brand-cyan)));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
 }
