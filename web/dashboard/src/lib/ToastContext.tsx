@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle2, AlertCircle, XCircle, Info, X } from 'lucide-react'
 import { cn } from './utils'
 
-type ToastType = 'success' | 'error' | 'warning' | 'info'
+export type ToastType = 'success' | 'error' | 'warning' | 'info'
 
 interface Toast {
   id: string

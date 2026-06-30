@@ -48,6 +48,16 @@ See detailed audits in exploration phase. Key themes:
 
 ## Completed Improvements
 
+### 2026-06-30 — Phase 2: MainPage Redesign
+- [x] New MainPage layout: Dashboard tab + Jobs tab with TabList navigation
+- [x] Dashboard section: stat cards, pipeline controls, source breakdown, spark chart, top companies, recent activity, India locations
+- [x] Jobs section: filter bar with debounced search, source/location/India/sort selectors, always-visible job card actions
+- [x] Settings drawer: slide-over panel with target roles, locations, skills, experience/salary sliders, work types, exclude keywords
+- [x] Job cards: always-visible actions (not hover-revealed), proper ARIA labels, score badge, inline badges for India/strong match
+- [x] Removed 4 dead page components (DashboardPage, JobsPage, ProfilePage, HistoryPage)
+- [x] Exported ToastType from ToastContext for type-safe usage
+- [x] TypeScript compiles clean, Vite build: 615KB JS + 53KB CSS (181KB gzipped)
+
 ### 2026-06-30 — Phase 1: Frontend Foundation
 - [x] Installed @tanstack/react-query, @tanstack/react-virtual
 - [x] Design tokens in index.css (semantic colors, spacing, typography, radii, shadows)

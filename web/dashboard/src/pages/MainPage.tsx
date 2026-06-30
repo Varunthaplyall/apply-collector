@@ -1,22 +1,44 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { cn, safeUrl, timeAgo } from '@/lib/utils'
+import { cn, safeUrl, timeAgo, formatNumber } from '@/lib/utils'
 import {
-  fetchJobs, JobsResponse, Job, dismissJob, saveJob,
-  fetchCollectionStatus, CollectionStatus,
-  fetchProfile, saveProfile, Profile,
+  fetchJobs, type JobsResponse, type Job, type Profile, type Stats,
+  type PipelineStatus, type CollectionStatus,
 } from '@/lib/api'
-import { useToast } from '@/lib/ToastContext'
+import {
+  useStats, useJobs, useProfile, usePipelineStatus,
+  useCollectionStatus, useDismissJob, useSaveJob, useSaveProfile,
+} from '@/lib/queries'
+import { useToast, type ToastType } from '@/lib/ToastContext'
+import { useAuth } from '@/lib/AuthContext'
 import {
   Search, ChevronLeft, ChevronRight, MapPin,
   ExternalLink, Calendar, Briefcase, X,
   ThumbsDown, ThumbsUp, CheckCircle2,
   Settings, Sparkles, Target, Database,
-  SlidersHorizontal,
+  SlidersHorizontal, Layers, TrendingUp,
+  Building2, Filter, Home, ListFilter,
+  Loader2, RefreshCw, ArrowUpRight,
 } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
+import { Badge } from '@/components/ui/Badge'
+import { Input } from '@/components/ui/Input'
+import { Tabs, TabList, Tab, TabPanel } from '@/components/ui/Tabs'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { ErrorState } from '@/components/ui/ErrorState'
+import Skeleton from '@/components/Skeleton'
+import PipelineControls from '@/components/PipelineControls'
+import SparkChart from '@/components/SparkChart'
+import TopCompanies from '@/components/TopCompanies'
+import SourceBreakdown from '@/components/SourceBreakdown'
+import RecentActivity from '@/components/RecentActivity'
 
-// ────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════════════
+
 const SORT_OPTIONS = [
   { value: 'match', label: 'Best Match' },
   { value: 'newest', label: 'Newest' },
@@ -26,45 +48,30 @@ const SORT_OPTIONS = [
 ]
 
 const ROLE_CATEGORIES = [
-  'Software Engineer', 'Senior Software Engineer', 'Engineering Manager', 'Data Scientist',
-  'DevOps Engineer', 'QA Engineer', 'Security Engineer', 'IT Support',
-  'Product Manager', 'Product Designer', 'UX Designer', 'UI Designer', 'Technical Writer',
-  'Marketing Manager', 'Sales Representative', 'Account Executive', 'Content Writer',
-  'SEO Specialist', 'Social Media Manager', 'Brand Manager',
-  'Accountant', 'Financial Analyst', 'Operations Manager', 'Project Manager',
-  'Business Analyst', 'HR Manager', 'Recruiter', 'Office Manager',
-  'Nurse', 'Doctor', 'Pharmacist', 'Medical Assistant', 'Lab Technician',
-  'Teacher', 'Professor', 'Teaching Assistant', 'Curriculum Designer',
-  'Customer Support', 'Administrative Assistant', 'Consultant', 'Freelancer',
+  'Software Engineer', 'Senior Software Engineer', 'Engineering Manager',
+  'Data Scientist', 'DevOps Engineer', 'Security Engineer',
+  'Product Manager', 'Product Designer', 'UX Designer',
 ]
+
+const WORK_TYPES = ['Full-time', 'Part-time', 'Contract', 'Internship', 'Freelance']
 
 const ALL_SOURCES = [
   'greenhouse', 'lever', 'workday', 'linkedin', 'cutshort',
-  'wellfound', 'adzuna', 'remoteok', 'remotive', 'himalayas',
-  'yc_jobs', 'arbeitnow', 'iimjobs', 'jsearch',
+  'remoteok', 'remotive', 'himalayas', 'yc_jobs', 'arbeitnow',
 ]
-// ────────────────────────────────────────────────────────────────────────
 
-const jobVariants = {
-  hidden: { opacity: 0, y: 6 },
-  visible: (i: number) => ({
-    opacity: 1, y: 0,
-    transition: { delay: Math.min(i * 0.025, 0.6), duration: 0.25 },
-  }),
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// Main Page
+// ═══════════════════════════════════════════════════════════════════════════
 
 export default function MainPage() {
+  const { user } = useAuth()
   const { addToast } = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [data, setData] = useState<JobsResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [dismissedIds, setDismissedIds] = useState<Set<number>>(new Set())
-  const [savedIds, setSavedIds] = useState<Set<number>>(new Set())
-  const [collectionStatus, setCollectionStatus] = useState<CollectionStatus | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState('dashboard')
 
-  // Auto-open settings for onboarding (new users without profile)
+  // Auto-open settings for onboarding
   useEffect(() => {
     if (searchParams.get('onboarding') === '1') {
       setSettingsOpen(true)
@@ -75,7 +82,8 @@ export default function MainPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const filters = {
+  // Filters from URL
+  const filters = useMemo(() => ({
     source: searchParams.get('source') || '',
     company: searchParams.get('company') || '',
     location: searchParams.get('location') || '',
@@ -83,50 +91,53 @@ export default function MainPage() {
     india: searchParams.get('india') || '',
     sort: searchParams.get('sort') || 'match',
     page: parseInt(searchParams.get('page') || '1'),
-  }
+  }), [searchParams])
 
-  const activeFilterCount = Object.entries(filters).filter(([k, v]) =>
-    v && k !== 'sort' && k !== 'page' && String(v) !== ''
-  ).length
+  const activeFilterCount = useMemo(
+    () => Object.entries(filters).filter(([k, v]) =>
+      v && k !== 'sort' && k !== 'page' && String(v) !== ''
+    ).length,
+    [filters],
+  )
 
-  const loadJobs = useCallback(async () => {
-    setLoading(true); setError(null)
-    try { const res = await fetchJobs(filters); setData(res) }
-    catch (err) { setError(err instanceof Error ? err.message : 'Failed') }
-    finally { setLoading(false) }
-  }, [searchParams.toString()])
+  // Queries
+  const { data: stats, isLoading: statsLoading } = useStats()
+  const { data: jobsData, isLoading: jobsLoading, error: jobsError, refetch: refetchJobs } = useJobs(filters)
+  const { data: profile } = useProfile()
+  const { data: collectionStatus } = useCollectionStatus()
 
-  useEffect(() => { loadJobs() }, [loadJobs])
+  // Mutations
+  const dismissMutation = useDismissJob()
+  const saveMutation = useSaveJob()
 
-  useEffect(() => {
-    fetchCollectionStatus().then(setCollectionStatus).catch(() => {})
-  }, [])
-
-  const updateFilter = (key: string, value: string) => {
+  // URL helpers
+  const updateFilter = useCallback((key: string, value: string) => {
     const next = new URLSearchParams(searchParams)
-    if (value) next.set(key, value); else next.delete(key)
+    if (value) next.set(key, value)
+    else next.delete(key)
     if (key !== 'page') next.delete('page')
     setSearchParams(next)
-  }
+  }, [searchParams, setSearchParams])
 
-  const clearFilters = () => setSearchParams(new URLSearchParams({ sort: filters.sort }))
+  const clearFilters = useCallback(() => {
+    setSearchParams(new URLSearchParams({ sort: filters.sort }))
+  }, [filters.sort, setSearchParams])
 
-  const handleDismiss = async (jobId: number) => {
-    try {
-      await dismissJob(jobId)
-      setDismissedIds(prev => new Set(prev).add(jobId))
-      setSavedIds(prev => { const s = new Set(prev); s.delete(jobId); return s })
-    } catch { addToast('error', 'Error', 'Failed') }
-  }
+  // Job actions
+  const handleDismiss = useCallback(async (jobId: number) => {
+    try { await dismissMutation.mutateAsync(jobId) }
+    catch { addToast('error', 'Error', 'Failed to dismiss job') }
+  }, [dismissMutation, addToast])
 
-  const handleSave = async (jobId: number) => {
-    try {
-      await saveJob(jobId)
-      setSavedIds(prev => new Set(prev).add(jobId))
-      setDismissedIds(prev => { const s = new Set(prev); s.delete(jobId); return s })
-    } catch { addToast('error', 'Error', 'Failed') }
-  }
+  const handleSave = useCallback(async (jobId: number) => {
+    try { await saveMutation.mutateAsync(jobId) }
+    catch { addToast('error', 'Error', 'Failed to save job') }
+  }, [saveMutation, addToast])
 
+  // Pipeline status polling active when tab is Jobs
+  const isPipelineActive = true // Always poll
+
+  // Score helpers
   const scoreColor = (s: number | null | undefined) => {
     if (!s) return 'text-muted-foreground'
     if (s >= 80) return 'text-emerald-400'
@@ -135,235 +146,593 @@ export default function MainPage() {
   }
 
   const scoreBg = (s: number | null | undefined) => {
-    if (!s) return 'bg-secondary text-muted-foreground'
-    if (s >= 80) return 'bg-emerald-500/15 text-emerald-400'
-    if (s >= 50) return 'bg-amber-500/15 text-amber-400'
-    return 'bg-secondary text-muted-foreground'
+    if (!s) return 'bg-muted text-muted-foreground'
+    if (s >= 80) return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20'
+    if (s >= 50) return 'bg-amber-500/15 text-amber-400 border-amber-500/20'
+    return 'bg-muted text-muted-foreground'
   }
-
-  const statusText = collectionStatus?.last_run
-    ? (() => {
-        const d = new Date(collectionStatus.last_run.run_date)
-        const mins = Math.round((Date.now() - d.getTime()) / 60000)
-        if (mins < 1) return 'just now'
-        if (mins < 60) return `${mins}m ago`
-        if (mins < 1440) return `${Math.round(mins / 60)}h ago`
-        return `${Math.round(mins / 1440)}d ago`
-      })()
-    : null
 
   return (
     <div className="flex h-[calc(100vh-48px)]">
-      {/* ── Main Content ──────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Filter bar */}
-        <div className="flex-shrink-0 border-b border-border bg-background/80 backdrop-blur-sm px-3 py-2">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <div className="relative flex-1 min-w-[140px] max-w-[280px]">
-              <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/50" />
-              <input
-                className="h-7 w-full rounded-md border-0 bg-muted pl-7 pr-2.5 font-mono text-[12px] text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30"
-                placeholder="Search jobs..."
-                value={filters.search}
-                onChange={e => updateFilter('search', e.target.value)}
-              />
-            </div>
+      {/* ── Main Content ──────────────────────────────────────────────── */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Tabs */}
+        <div className="flex-shrink-0 border-b border-border bg-background/80 backdrop-blur-sm px-3 py-1.5">
+          <div className="flex items-center justify-between">
+            <Tabs defaultValue="dashboard" onChange={setActiveTab}>
+              <TabList>
+                <Tab id="dashboard">
+                  <Home className="h-3.5 w-3.5" /> Dashboard
+                </Tab>
+                <Tab id="jobs" count={jobsData?.count}>
+                  <ListFilter className="h-3.5 w-3.5" /> Jobs
+                </Tab>
+              </TabList>
+            </Tabs>
 
-            <select
-              className="h-7 rounded-md border-0 bg-muted px-2 font-mono text-[11px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30"
-              value={filters.source}
-              onChange={e => updateFilter('source', e.target.value)}
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
             >
-              <option value="">All Sources</option>
-              {(data?.sources ?? ALL_SOURCES).map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-
-            <input
-              className="h-7 w-24 rounded-md border-0 bg-muted px-2 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30"
-              placeholder="Location..."
-              value={filters.location}
-              onChange={e => updateFilter('location', e.target.value)}
-            />
-
-            <label className={cn(
-              'flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 font-mono text-[10px] font-medium select-none',
-              filters.india === '1' ? 'bg-amber-500/10 text-amber-400' : 'bg-muted text-muted-foreground hover:text-foreground'
-            )}>
-              <input type="checkbox" checked={filters.india === '1'} onChange={e => updateFilter('india', e.target.checked ? '1' : '')} className="sr-only" />
-              <MapPin className="h-2.5 w-2.5" />India
-            </label>
-
-            <select
-              className="h-7 rounded-md border-0 bg-muted px-2 font-mono text-[11px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30"
-              value={filters.sort}
-              onChange={e => updateFilter('sort', e.target.value)}
-            >
-              {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-
-            <AnimatePresence>
-              {activeFilterCount > 0 && (
-                <motion.button
-                  initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }}
-                  onClick={clearFilters}
-                  className="flex h-7 items-center gap-1 rounded-md px-2 font-mono text-[10px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <X className="h-2.5 w-2.5" />Clear
-                </motion.button>
-              )}
-            </AnimatePresence>
-
-            <div className="ml-auto flex items-center gap-2">
-              {collectionStatus && (
-                <span className="hidden sm:flex items-center gap-1 font-mono text-[10px] text-muted-foreground/40">
-                  <Database className="h-2.5 w-2.5" />
-                  {collectionStatus.total_jobs.toLocaleString()} · {statusText}
-                </span>
-              )}
-              {data && (
-                <span className="font-mono text-[10px] font-semibold text-muted-foreground tabular-nums">{data.count.toLocaleString()} results</span>
-              )}
-            </div>
+              <Settings className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Settings</span>
+            </button>
           </div>
         </div>
 
-        {/* Job list */}
-        <div className="flex-1 overflow-y-auto px-3 py-2">
-          {loading ? (
-            <div className="space-y-1.5">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <div key={i} className="rounded-lg border border-border bg-card p-3">
-                  <div className="shimmer-bg h-3.5 w-3/4 rounded mb-1.5" />
-                  <div className="shimmer-bg h-2.5 w-1/2 rounded mb-1.5" />
-                  <div className="shimmer-bg h-2.5 w-1/3 rounded" />
-                </div>
-              ))}
-            </div>
-          ) : error ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <p className="font-mono text-xs text-destructive">{error}</p>
-              <button onClick={loadJobs} className="mt-3 rounded-md bg-primary px-3 py-1.5 font-mono text-[11px] font-semibold text-primary-foreground">Retry</button>
-            </div>
-          ) : !data?.jobs.length ? (
-            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-              <Briefcase className="mb-2 h-8 w-8 opacity-15" />
-              <p className="font-mono text-xs">No jobs match your filters</p>
-              {activeFilterCount > 0 && (
-                <button onClick={clearFilters} className="mt-3 rounded-md bg-muted px-3 py-1.5 font-mono text-[11px]">Clear filters</button>
-              )}
-            </div>
+        {/* Tab Content */}
+        <div className="flex-1 overflow-y-auto">
+          {activeTab === 'dashboard' ? (
+            <DashboardTab
+              stats={stats ?? null}
+              statsLoading={statsLoading}
+              collectionStatus={collectionStatus ?? null}
+              profile={profile ?? null}
+            />
           ) : (
-            <>
-              <div className="space-y-1">
-                {data.jobs.map((job, i) => (
-                  <JobCard key={job.id} job={job} index={i} scoreColor={scoreColor} scoreBg={scoreBg}
-                    isDismissed={dismissedIds.has(job.id)} isSaved={savedIds.has(job.id)}
-                    onDismiss={handleDismiss} onSave={handleSave} />
-                ))}
-              </div>
-              {data.total_pages > 1 && (
-                <div className="flex items-center justify-center gap-1.5 mt-4 pb-3">
-                  <button onClick={() => updateFilter('page', String(data.page - 1))} disabled={data.page <= 1}
-                    className="rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-20">
-                    <ChevronLeft className="h-3.5 w-3.5" />
-                  </button>
-                  <span className="font-mono text-[10px] text-muted-foreground px-1">{data.page}/{data.total_pages}</span>
-                  <button onClick={() => updateFilter('page', String(data.page + 1))} disabled={data.page >= data.total_pages}
-                    className="rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-20">
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
-            </>
+            <JobsTab
+              filters={Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, String(v)]))}
+              jobsData={jobsData ?? null}
+              loading={jobsLoading}
+              error={jobsError instanceof Error ? jobsError.message : null}
+              activeFilterCount={activeFilterCount}
+              collectionStatus={collectionStatus ?? null}
+              updateFilter={updateFilter}
+              clearFilters={clearFilters}
+              handleDismiss={handleDismiss}
+              handleSave={handleSave}
+              scoreColor={scoreColor}
+              scoreBg={scoreBg}
+              onRetry={() => refetchJobs()}
+            />
           )}
         </div>
       </main>
 
-      {/* ── Settings Panel ────────────────────────────────────────── */}
+      {/* ── Settings Drawer ────────────────────────────────────────────── */}
       <AnimatePresence>
         {settingsOpen && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
               onClick={() => setSettingsOpen(false)}
-              className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm" />
+              className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            />
             <motion.aside
-              initial={{ x: 340, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 340, opacity: 0 }}
+              initial={{ x: 380, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 380, opacity: 0 }}
               transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-              className="fixed right-0 top-0 z-50 h-full w-[380px] max-w-[92vw] border-l border-border bg-card shadow-2xl overflow-y-auto"
+              className="fixed right-0 top-0 z-50 h-full w-[420px] max-w-[92vw] border-l border-border/50 bg-card shadow-2xl overflow-hidden flex flex-col"
             >
-              <SettingsPanel onClose={() => setSettingsOpen(false)} />
+              <SettingsDrawer
+                profile={profile ?? null}
+                onClose={() => setSettingsOpen(false)}
+                addToast={addToast}
+              />
             </motion.aside>
           </>
         )}
       </AnimatePresence>
-
-      {/* Settings FAB */}
-      <button onClick={() => setSettingsOpen(true)}
-        className={cn(
-          'fixed right-3 bottom-3 z-30 flex items-center gap-1.5 rounded-lg px-3 py-2 font-mono text-[11px] font-semibold shadow-lg',
-          'bg-card border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 transition-all',
-          settingsOpen && 'opacity-0 pointer-events-none',
-        )}>
-        <Settings className="h-3 w-3" />Settings
-      </button>
     </div>
   )
 }
 
-// ────────────────────────────────────────────────────────────────────────
-// Job Card
-// ────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Dashboard Tab
+// ═══════════════════════════════════════════════════════════════════════════
 
-function JobCard({ job, index, scoreColor, scoreBg, isDismissed, isSaved, onDismiss, onSave }: {
-  job: Job; index: number
+function DashboardTab({
+  stats, statsLoading, collectionStatus, profile,
+}: {
+  stats: Stats | null
+  statsLoading: boolean
+  collectionStatus: CollectionStatus | null
+  profile: Profile | null
+}) {
+  const lastRunText = collectionStatus?.last_run
+    ? timeAgo(collectionStatus.last_run.run_date)
+    : null
+
+  return (
+    <div className="p-4 lg:p-6 space-y-5 max-w-[1440px] mx-auto">
+      {/* Welcome + Stats row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-foreground tracking-tight">Dashboard</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {collectionStatus
+              ? `${formatNumber(collectionStatus.total_jobs)} jobs collected · Last run ${lastRunText}`
+              : 'Loading...'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {statsLoading ? (
+            <Skeleton variant="block" className="h-8 w-32" />
+          ) : stats ? (
+            <>
+              <Badge color="info" size="md">
+                {formatNumber(stats.unique)} unique jobs
+              </Badge>
+              {stats.profile_matches > 0 && (
+                <Badge color="success" size="md">
+                  {stats.profile_matches} matches
+                </Badge>
+              )}
+              {stats.today_jobs > 0 && (
+                <Badge color="violet" size="md">
+                  {formatNumber(stats.today_jobs)} today
+                </Badge>
+              )}
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Stat Cards Grid */}
+      {statsLoading ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} variant="card" className="h-24" />
+          ))}
+        </div>
+      ) : stats ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCardSimple
+            label="Total Jobs"
+            value={formatNumber(stats.total)}
+            icon={<Database className="h-4 w-4" />}
+            color="blue"
+          />
+          <StatCardSimple
+            label="Unique Jobs"
+            value={formatNumber(stats.unique)}
+            icon={<Layers className="h-4 w-4" />}
+            color="violet"
+          />
+          <StatCardSimple
+            label="India Jobs"
+            value={formatNumber(stats.india_count)}
+            icon={<MapPin className="h-4 w-4" />}
+            color="amber"
+          />
+          <StatCardSimple
+            label="Your Matches"
+            value={formatNumber(stats.profile_matches)}
+            icon={<Target className="h-4 w-4" />}
+            color="emerald"
+          />
+        </div>
+      ) : null}
+
+      {/* Pipeline + Source Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <PipelineControls
+          onRunComplete={() => {}}
+          profileReady={!!profile}
+        />
+        {stats ? (
+          <SourceBreakdown sources={stats.by_source} total={stats.total} />
+        ) : (
+          <Skeleton variant="card" className="h-48" />
+        )}
+      </div>
+
+      {/* Charts + Activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {stats?.recent_runs?.length ? (
+          <SparkChart runs={stats.recent_runs} />
+        ) : (
+          <Skeleton variant="card" className="h-48" />
+        )}
+        {stats?.recent_runs?.length ? (
+          <RecentActivity runs={stats.recent_runs} />
+        ) : (
+          <Skeleton variant="card" className="h-48" />
+        )}
+      </div>
+
+      {/* Top Companies + Locations */}
+      {stats && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <TopCompanies companies={stats.top_companies} />
+          {stats.top_india_locations?.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MapPin className="h-4 w-4 text-amber-400" /> Top India Locations
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {stats.top_india_locations.slice(0, 8).map((loc, i) => (
+                    <div key={loc.location} className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">{loc.location}</span>
+                      <span className="font-mono text-xs font-semibold text-foreground">{loc.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Simple stat card for dashboard
+function StatCardSimple({ label, value, icon, color }: {
+  label: string; value: string; icon: React.ReactNode; color: string
+}) {
+  const colorMap: Record<string, string> = {
+    blue: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+    violet: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
+    amber: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    emerald: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  }
+
+  return (
+    <Card className="hover:border-border/80 transition-colors duration-150">
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          <div className={cn(
+            'flex h-8 w-8 items-center justify-center rounded-lg border',
+            colorMap[color] || colorMap.blue,
+          )}>
+            {icon}
+          </div>
+        </div>
+        <p className="mt-2 text-2xl font-bold text-foreground tabular-nums tracking-tight">{value}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Jobs Tab
+// ═══════════════════════════════════════════════════════════════════════════
+
+function JobsTab({
+  filters, jobsData, loading, error, activeFilterCount,
+  collectionStatus, updateFilter, clearFilters,
+  handleDismiss, handleSave, scoreColor, scoreBg, onRetry,
+}: {
+  filters: Record<string, string>
+  jobsData: JobsResponse | null
+  loading: boolean
+  error: string | null
+  activeFilterCount: number
+  collectionStatus: CollectionStatus | null
+  updateFilter: (key: string, value: string) => void
+  clearFilters: () => void
+  handleDismiss: (id: number) => void
+  handleSave: (id: number) => void
   scoreColor: (s: number | null | undefined) => string
   scoreBg: (s: number | null | undefined) => string
-  isDismissed: boolean; isSaved: boolean
-  onDismiss: (id: number) => void; onSave: (id: number) => void
+  onRetry: () => void
 }) {
+  const [searchValue, setSearchValue] = useState(filters.search)
+
+  // Debounced search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchValue !== filters.search) {
+        updateFilter('search', searchValue)
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchValue]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync search param → input
+  useEffect(() => {
+    setSearchValue(filters.search)
+  }, [filters.search])
+
+  const statusText = collectionStatus?.last_run
+    ? timeAgo(collectionStatus.last_run.run_date)
+    : null
+
   return (
-    <motion.div custom={index} variants={jobVariants} initial="hidden" animate="visible"
-      className="group/job rounded-lg border border-border/60 bg-card/60 hover:bg-card hover:border-border px-3 py-2.5 transition-all duration-150">
-      <div className="flex items-start gap-3">
-        {job.profile_score != null && (
-          <div className={cn('flex-shrink-0 flex items-center justify-center w-9 h-9 rounded-lg font-mono text-[10px] font-bold', scoreBg(job.profile_score))}>
-            {job.profile_score}
+    <div className="flex flex-col h-full">
+      {/* Filter Bar */}
+      <div className="flex-shrink-0 border-b border-border/50 bg-background/80 backdrop-blur-sm px-3 py-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[160px] max-w-[320px]">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Search jobs"
+              className="h-8 w-full rounded-lg border border-border/50 bg-muted/50 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring/20 focus:border-ring/30 transition-colors"
+              placeholder="Search jobs..."
+              value={searchValue}
+              onChange={e => setSearchValue(e.target.value)}
+            />
           </div>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <a href={safeUrl(job.url)} target="_blank" rel="noopener noreferrer"
-              className="font-sans text-[13px] font-semibold text-foreground hover:text-primary truncate">
-              {job.title}
-            </a>
-            {job.is_india === 1 && (
-              <span className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 font-mono text-[9px] font-semibold bg-amber-500/10 text-amber-400">
-                <MapPin className="h-2 w-2" />IN
+
+          <select
+            aria-label="Filter by source"
+            className="h-8 rounded-lg border border-border/50 bg-muted/50 px-2.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20"
+            value={filters.source}
+            onChange={e => updateFilter('source', e.target.value)}
+          >
+            <option value="">All Sources</option>
+            {(jobsData?.sources ?? ALL_SOURCES).map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <input
+            aria-label="Filter by location"
+            className="h-8 w-28 rounded-lg border border-border/50 bg-muted/50 px-2.5 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring/20"
+            placeholder="Location..."
+            value={filters.location}
+            onChange={e => updateFilter('location', e.target.value)}
+          />
+
+          <label className={cn(
+            'flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium select-none transition-colors',
+            filters.india === '1'
+              ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+              : 'border-border/50 bg-muted/50 text-muted-foreground hover:text-foreground'
+          )}>
+            <input
+              type="checkbox"
+              checked={filters.india === '1'}
+              onChange={e => updateFilter('india', e.target.checked ? '1' : '')}
+              className="sr-only"
+            />
+            <MapPin className="h-3 w-3" /> India
+          </label>
+
+          <select
+            aria-label="Sort order"
+            className="h-8 rounded-lg border border-border/50 bg-muted/50 px-2.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20"
+            value={filters.sort}
+            onChange={e => updateFilter('sort', e.target.value)}
+          >
+            {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+
+          <AnimatePresence>
+            {activeFilterCount > 0 && (
+              <motion.button
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                onClick={clearFilters}
+                className="flex h-8 items-center gap-1 rounded-lg border border-destructive/20 px-2.5 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                aria-label="Clear all filters"
+              >
+                <X className="h-3 w-3" /> Clear
+              </motion.button>
+            )}
+          </AnimatePresence>
+
+          {/* Collection status + result count */}
+          <div className="ml-auto flex items-center gap-3">
+            {collectionStatus && (
+              <span className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground/50">
+                <Database className="h-3 w-3" />
+                {formatNumber(collectionStatus.total_jobs)} jobs · {statusText}
+              </span>
+            )}
+            {jobsData && (
+              <span className="text-xs font-semibold text-muted-foreground tabular-nums">
+                {formatNumber(jobsData.count)} results
               </span>
             )}
           </div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap">
-            <span className="font-medium text-foreground/80">{job.company}</span>
-            {job.location && <span className="flex items-center gap-0.5"><MapPin className="h-2.5 w-2.5 opacity-40" />{job.location}</span>}
-            {job.salary_range && <span className="font-mono text-[10px] text-muted-foreground/50">{job.salary_range}</span>}
+        </div>
+      </div>
+
+      {/* Job List */}
+      <div className="flex-1 overflow-y-auto">
+        {loading && !jobsData ? (
+          <div className="p-3 space-y-2">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} variant="card" className="h-[72px]" delay={i * 0.05} />
+            ))}
           </div>
+        ) : error ? (
+          <ErrorState message={error} onRetry={onRetry} />
+        ) : !jobsData?.jobs?.length ? (
+          <EmptyState
+            icon={<Briefcase className="h-8 w-8" />}
+            title="No jobs match your filters"
+            description={activeFilterCount > 0 ? 'Try removing some filters to broaden your search.' : 'No jobs have been collected yet. Jobs appear here after collection runs.'}
+            action={activeFilterCount > 0 ? (
+              <Button variant="outline" size="sm" onClick={clearFilters}>Clear filters</Button>
+            ) : undefined}
+          />
+        ) : (
+          <>
+            <div className="p-3 space-y-1.5">
+              {jobsData.jobs.map((job, i) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  index={i}
+                  scoreColor={scoreColor}
+                  scoreBg={scoreBg}
+                  onDismiss={handleDismiss}
+                  onSave={handleSave}
+                />
+              ))}
+            </div>
+
+            {/* Pagination */}
+            {jobsData.total_pages > 1 && (
+              <div className="flex items-center justify-center gap-2 pb-4">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => updateFilter('page', String(jobsData.page - 1))}
+                  disabled={jobsData.page <= 1}
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="text-xs text-muted-foreground font-mono">
+                  {jobsData.page} / {jobsData.total_pages}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => updateFilter('page', String(jobsData.page + 1))}
+                  disabled={jobsData.page >= jobsData.total_pages}
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Job Card
+// ═══════════════════════════════════════════════════════════════════════════
+
+function JobCard({
+  job, index, scoreColor, scoreBg, onDismiss, onSave,
+}: {
+  job: Job; index: number
+  scoreColor: (s: number | null | undefined) => string
+  scoreBg: (s: number | null | undefined) => string
+  onDismiss: (id: number) => void
+  onSave: (id: number) => void
+}) {
+  const [saved, setSaved] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: Math.min(index * 0.015, 0.3), duration: 0.2 }}
+      className={cn(
+        'group/job rounded-lg border border-border/50 bg-card/70 hover:bg-card hover:border-border px-3 py-2.5 transition-all duration-150',
+        dismissed && 'opacity-40 pointer-events-none',
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {/* Score badge */}
+        {job.profile_score != null && (
+          <div className={cn(
+            'flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-xl border text-xs font-bold tabular-nums',
+            scoreBg(job.profile_score),
+          )}>
+            {job.profile_score}
+          </div>
+        )}
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <a
+              href={safeUrl(job.url)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-semibold text-foreground hover:text-primary truncate transition-colors"
+            >
+              {job.title}
+            </a>
+            {job.is_india === 1 && (
+              <Badge color="warning" size="sm">
+                <MapPin className="h-2 w-2 mr-0.5" /> IN
+              </Badge>
+            )}
+            {job.match_score != null && job.match_score >= 80 && (
+              <Badge color="success" size="sm">Strong Match</Badge>
+            )}
+          </div>
+
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
+            <span className="font-medium text-foreground/80">{job.company}</span>
+            {job.location && (
+              <span className="flex items-center gap-0.5">
+                <MapPin className="h-3 w-3 opacity-40" aria-hidden="true" />
+                {job.location}
+              </span>
+            )}
+            {job.salary_range && (
+              <span className="font-mono text-[11px] text-muted-foreground/60">{job.salary_range}</span>
+            )}
+          </div>
+
           <div className="mt-1 flex items-center gap-2">
-            <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground/40">{job.source}</span>
-            {job.scraped_at && <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground/30"><Calendar className="h-2 w-2" />{timeAgo(job.scraped_at)}</span>}
+            <Badge color="default" size="sm">{job.source}</Badge>
+            {job.scraped_at && (
+              <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground/40">
+                <Calendar className="h-2.5 w-2.5" aria-hidden="true" />
+                {timeAgo(job.scraped_at)}
+              </span>
+            )}
           </div>
         </div>
-        <div className="flex-shrink-0 flex items-center gap-0 opacity-0 group-hover/job:opacity-100 transition-opacity">
-          <button onClick={(e) => { e.preventDefault(); onSave(job.id) }}
-            className={cn('rounded p-1', isSaved ? 'bg-emerald-500/10 text-emerald-400' : 'text-muted-foreground/30 hover:text-emerald-400 hover:bg-emerald-500/5')}>
-            {isSaved ? <CheckCircle2 className="h-3 w-3" /> : <ThumbsUp className="h-3 w-3" />}
+
+        {/* Actions — always visible, not hover-revealed */}
+        <div className="flex-shrink-0 flex items-center gap-0.5">
+          <button
+            onClick={(e) => { e.preventDefault(); setSaved(!saved); onSave(job.id) }}
+            className={cn(
+              'rounded-lg p-1.5 transition-colors',
+              saved
+                ? 'bg-emerald-500/10 text-emerald-400'
+                : 'text-muted-foreground/40 hover:text-emerald-400 hover:bg-emerald-500/5',
+            )}
+            aria-label={saved ? 'Unsave job' : 'Save job'}
+          >
+            {saved ? <CheckCircle2 className="h-3.5 w-3.5" /> : <ThumbsUp className="h-3.5 w-3.5" />}
           </button>
-          <button onClick={(e) => { e.preventDefault(); onDismiss(job.id) }}
-            className={cn('rounded p-1', isDismissed ? 'bg-red-500/10 text-red-400' : 'text-muted-foreground/30 hover:text-red-400 hover:bg-red-500/5')}>
-            {isDismissed ? <X className="h-3 w-3" /> : <ThumbsDown className="h-3 w-3" />}
+          <button
+            onClick={(e) => { e.preventDefault(); setDismissed(true); onDismiss(job.id) }}
+            className={cn(
+              'rounded-lg p-1.5 transition-colors',
+              dismissed
+                ? 'bg-red-500/10 text-red-400'
+                : 'text-muted-foreground/40 hover:text-red-400 hover:bg-red-500/5',
+            )}
+            aria-label="Dismiss job"
+          >
+            <ThumbsDown className="h-3.5 w-3.5" />
           </button>
-          <a href={safeUrl(job.url)} target="_blank" rel="noopener noreferrer"
-            className="rounded p-1 text-muted-foreground/30 hover:text-foreground hover:bg-muted">
-            <ExternalLink className="h-3 w-3" />
+          <a
+            href={safeUrl(job.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg p-1.5 text-muted-foreground/40 hover:text-foreground hover:bg-muted transition-colors"
+            aria-label="Open job posting in new tab"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
           </a>
         </div>
       </div>
@@ -371,185 +740,247 @@ function JobCard({ job, index, scoreColor, scoreBg, isDismissed, isSaved, onDism
   )
 }
 
-// ────────────────────────────────────────────────────────────────────────
-// Settings Panel
-// ────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Settings Drawer
+// ═══════════════════════════════════════════════════════════════════════════
 
-function SettingsPanel({ onClose }: { onClose: () => void }) {
-  const { addToast } = useToast()
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [loading, setLoading] = useState(true)
+function SettingsDrawer({
+  profile: initialProfile, onClose, addToast,
+}: {
+  profile: Profile | null
+  onClose: () => void
+  addToast: (type: ToastType, title: string, message?: string) => void
+}) {
+  const { data: fetchedProfile, isLoading: profileLoading } = useProfile()
+  const saveProfileMutation = useSaveProfile()
   const [saving, setSaving] = useState(false)
 
+  const profile = fetchedProfile ?? initialProfile
+  const defaultProfile: Profile = {
+    id: null, name: '', email: '', target_roles: [], job_title_aliases: [],
+    preferred_locations: [], skills: [], work_types: [], experience_years: 5,
+    remote_only: false, salary_min: 0, preferred_industries: [], preferred_company_stage: [],
+    enabled_sources: ALL_SOURCES, keywords_include: [], keywords_exclude: [], is_active: false,
+  }
+  const [local, setLocal] = useState<Profile>(defaultProfile)
+
   useEffect(() => {
-    fetchProfile().then(data => {
-      setProfile(data || {
-        id: null, name: '', email: '', target_roles: [], job_title_aliases: [],
-        preferred_locations: [], skills: [], work_types: [], experience_years: 5,
-        remote_only: false, salary_min: 0, preferred_industries: [], preferred_company_stage: [],
-        enabled_sources: ALL_SOURCES, keywords_include: [], keywords_exclude: [], is_active: false,
-      })
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [])
+    if (profile) setLocal(profile)
+  }, [profile])
 
-  if (!profile) return null
+  const update = (key: string, value: unknown) => {
+    setLocal(p => p ? { ...p, [key]: value } : p)
+  }
 
-  const update = (key: string, value: unknown) => { setProfile(p => p ? { ...p, [key]: value } : p) }
   const toggleArray = (key: string, item: string) => {
-    setProfile(p => {
+    setLocal(p => {
       if (!p) return p
-      const arr = p[key as keyof Profile] as string[]
+      const arr = (p as unknown as Record<string, unknown>)[key] as string[]
       return { ...p, [key]: arr.includes(item) ? arr.filter(i => i !== item) : [...arr, item] }
     })
   }
 
   const handleSave = async () => {
-    if (!profile) return; setSaving(true)
+    if (!local) return
+    setSaving(true)
     try {
       const fd: Record<string, string> = {}
-      if (profile.id) fd.id = String(profile.id)
-      fd.name = profile.name || 'User'; fd.email = profile.email || ''
-      fd.target_roles = profile.target_roles.join(',')
-      fd.job_title_aliases = profile.job_title_aliases.join(',')
-      fd.preferred_locations = profile.preferred_locations.join(',')
-      fd.skills = profile.skills.join(',')
-      fd.work_types = profile.work_types.join(',')
-      fd.experience_years_min = String(profile.experience_years)
-      fd.experience_years_max = String(Math.min(profile.experience_years + 10, 30))
-      fd.remote_preference = profile.remote_only ? 'REMOTE' : 'ANY'
-      fd.min_salary = String(profile.salary_min); fd.salary_currency = 'USD'
-      fd.preferred_industries = profile.preferred_industries.join(',')
-      fd.preferred_sources = profile.enabled_sources.join(',')
-      fd.include_keywords = profile.keywords_include.join(',')
-      fd.exclude_keywords = profile.keywords_exclude.join(',')
-      fd.experience_level = 'MID'; fd.education_level = 'ANY'
-      await saveProfile(fd); addToast('success', 'Saved', 'Profile updated'); onClose()
-    } catch (err) { addToast('error', 'Error', err instanceof Error ? err.message : 'Failed') }
-    finally { setSaving(false) }
+      if (local.id) fd.id = String(local.id)
+      fd.name = local.name || 'User'
+      fd.email = local.email || ''
+      fd.target_roles = local.target_roles.join(',')
+      fd.job_title_aliases = local.job_title_aliases.join(',')
+      fd.preferred_locations = local.preferred_locations.join(',')
+      fd.skills = local.skills.join(',')
+      fd.work_types = local.work_types.join(',')
+      fd.experience_years_min = String(local.experience_years)
+      fd.experience_years_max = String(Math.min(local.experience_years + 10, 30))
+      fd.remote_preference = local.remote_only ? 'REMOTE' : 'ANY'
+      fd.min_salary = String(local.salary_min)
+      fd.salary_currency = 'USD'
+      fd.preferred_industries = local.preferred_industries.join(',')
+      fd.preferred_sources = local.enabled_sources.join(',')
+      fd.include_keywords = local.keywords_include.join(',')
+      fd.exclude_keywords = local.keywords_exclude.join(',')
+      fd.experience_level = 'MID'
+      fd.education_level = 'ANY'
+
+      await saveProfileMutation.mutateAsync(fd)
+      addToast('success', 'Saved', 'Profile updated')
+      onClose()
+    } catch (err) {
+      addToast('error', 'Error', err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-            <Settings className="h-3.5 w-3.5 text-primary" />
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/50">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/10">
+            <Settings className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <h2 className="font-sans text-[13px] font-bold text-foreground">Settings</h2>
-            <p className="font-mono text-[9px] text-muted-foreground">Profile & preferences</p>
+            <h2 className="text-sm font-bold text-foreground">Profile Settings</h2>
+            <p className="text-[11px] text-muted-foreground">Customize your job matching</p>
           </div>
         </div>
-        <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted">
+        <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close settings">
           <X className="h-4 w-4" />
-        </button>
+        </Button>
       </div>
 
-      {loading ? (
-        <div className="flex-1 p-4 space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => <div key={i} className="shimmer-bg h-10 rounded-lg" />)}
+      {/* Content */}
+      {profileLoading ? (
+        <div className="flex-1 p-5 space-y-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} variant="block" className="h-12" delay={i * 0.05} />
+          ))}
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <Section icon={<Target className="h-3 w-3" />} label="Target Roles" color="text-primary">
-            <div className="flex flex-wrap gap-1">
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {/* Target Roles */}
+          <SettingsSection icon={<Target className="h-3.5 w-3.5" />} label="Target Roles" color="text-primary">
+            <div className="flex flex-wrap gap-1.5 mb-2">
               {ROLE_CATEGORIES.map(role => (
-                <button key={role} onClick={() => toggleArray('target_roles', role)}
-                  className={cn('rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium transition-all',
-                    profile.target_roles.includes(role)
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-border bg-muted text-muted-foreground hover:border-muted-foreground/20')}>{role}</button>
+                <button
+                  key={role}
+                  onClick={() => toggleArray('target_roles', role)}
+                  className={cn(
+                    'rounded-lg border px-2.5 py-1 text-xs font-medium transition-all',
+                    local.target_roles.includes(role)
+                      ? 'border-primary/40 bg-primary text-primary-foreground'
+                      : 'border-border/50 bg-muted/50 text-muted-foreground hover:border-muted-foreground/30',
+                  )}
+                >
+                  {role}
+                </button>
               ))}
             </div>
             <input
-              className="mt-1.5 h-7 w-full rounded-md border-0 bg-muted px-2 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30"
-              value={profile.target_roles.join(', ')}
+              className="h-8 w-full rounded-lg border border-border/50 bg-muted/50 px-2.5 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring/20"
+              value={local.target_roles.join(', ')}
               onChange={e => update('target_roles', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
               placeholder="Or type custom roles..."
             />
-          </Section>
+          </SettingsSection>
 
-          <Section icon={<MapPin className="h-3 w-3" />} label="Locations" color="text-emerald-400">
+          {/* Locations */}
+          <SettingsSection icon={<MapPin className="h-3.5 w-3.5" />} label="Locations" color="text-emerald-400">
             <input
-              className="h-7 w-full rounded-md border-0 bg-muted px-2 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30"
-              value={profile.preferred_locations.join(', ')}
+              className="h-8 w-full rounded-lg border border-border/50 bg-muted/50 px-2.5 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring/20"
+              value={local.preferred_locations.join(', ')}
               onChange={e => update('preferred_locations', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
               placeholder="Bengaluru, Remote, Mumbai, Delhi NCR..."
             />
-            <label className="flex items-center gap-1.5 mt-1.5 cursor-pointer">
-              <input type="checkbox" checked={profile.remote_only} onChange={e => update('remote_only', e.target.checked)} className="accent-primary" />
-              <span className="font-mono text-[10px] text-muted-foreground">Remote only</span>
+            <label className="flex items-center gap-2 mt-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={local.remote_only}
+                onChange={e => update('remote_only', e.target.checked)}
+                className="h-4 w-4 rounded border-border/50 bg-muted accent-primary"
+              />
+              <span className="text-xs text-muted-foreground">Remote only</span>
             </label>
-          </Section>
+          </SettingsSection>
 
-          <Section icon={<Sparkles className="h-3 w-3" />} label="Skills" color="text-brand-violet">
+          {/* Skills */}
+          <SettingsSection icon={<Sparkles className="h-3.5 w-3.5" />} label="Skills" color="text-violet-400">
             <input
-              className="h-7 w-full rounded-md border-0 bg-muted px-2 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30"
-              value={profile.skills.join(', ')}
+              className="h-8 w-full rounded-lg border border-border/50 bg-muted/50 px-2.5 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring/20"
+              value={local.skills.join(', ')}
               onChange={e => update('skills', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
               placeholder="Python, React, TypeScript, AWS, Docker..."
             />
-          </Section>
+          </SettingsSection>
 
-          <Section icon={<Briefcase className="h-3 w-3" />} label="Experience & Salary" color="text-amber-400">
-            <div className="space-y-2.5">
+          {/* Experience & Salary */}
+          <SettingsSection icon={<Briefcase className="h-3.5 w-3.5" />} label="Experience & Salary" color="text-amber-400">
+            <div className="space-y-3">
               <div>
-                <div className="flex justify-between font-mono text-[9px] text-muted-foreground mb-0.5">
-                  <span>Min Experience</span><span>{profile.experience_years}y</span>
+                <div className="flex justify-between text-[11px] text-muted-foreground mb-1">
+                  <span>Min Experience</span>
+                  <span className="font-mono font-semibold text-foreground">{local.experience_years}y</span>
                 </div>
-                <input type="range" min="0" max="20" value={profile.experience_years} onChange={e => update('experience_years', parseInt(e.target.value))} className="w-full accent-primary h-1" />
+                <input
+                  type="range" min="0" max="20" value={local.experience_years}
+                  onChange={e => update('experience_years', parseInt(e.target.value))}
+                  className="w-full accent-primary h-1.5"
+                />
               </div>
               <div>
-                <div className="flex justify-between font-mono text-[9px] text-muted-foreground mb-0.5">
-                  <span>Min Salary</span><span>${profile.salary_min.toLocaleString()}</span>
+                <div className="flex justify-between text-[11px] text-muted-foreground mb-1">
+                  <span>Min Salary</span>
+                  <span className="font-mono font-semibold text-foreground">${local.salary_min.toLocaleString()}</span>
                 </div>
-                <input type="range" min="0" max="300000" step="10000" value={profile.salary_min} onChange={e => update('salary_min', parseInt(e.target.value))} className="w-full accent-emerald-500 h-1" />
+                <input
+                  type="range" min="0" max="300000" step="10000" value={local.salary_min}
+                  onChange={e => update('salary_min', parseInt(e.target.value))}
+                  className="w-full accent-emerald-500 h-1.5"
+                />
               </div>
             </div>
-          </Section>
+          </SettingsSection>
 
-          <Section icon={<SlidersHorizontal className="h-3 w-3" />} label="Work Type" color="text-brand-cyan">
-            <div className="flex flex-wrap gap-1">
-              {['Full-time', 'Part-time', 'Contract', 'Internship', 'Freelance'].map(wt => (
-                <button key={wt} onClick={() => toggleArray('work_types', wt)}
-                  className={cn('rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium transition-all',
-                    profile.work_types.includes(wt)
-                      ? 'border-brand-cyan bg-brand-cyan/15 text-brand-cyan'
-                      : 'border-border bg-muted text-muted-foreground hover:border-muted-foreground/20')}>{wt}</button>
+          {/* Work Type */}
+          <SettingsSection icon={<SlidersHorizontal className="h-3.5 w-3.5" />} label="Work Type" color="text-cyan-400">
+            <div className="flex flex-wrap gap-1.5">
+              {WORK_TYPES.map(wt => (
+                <button
+                  key={wt}
+                  onClick={() => toggleArray('work_types', wt)}
+                  className={cn(
+                    'rounded-lg border px-2.5 py-1 text-xs font-medium transition-all',
+                    local.work_types.includes(wt)
+                      ? 'border-cyan-500/30 bg-cyan-500/15 text-cyan-400'
+                      : 'border-border/50 bg-muted/50 text-muted-foreground hover:border-muted-foreground/30',
+                  )}
+                >
+                  {wt}
+                </button>
               ))}
             </div>
-          </Section>
+          </SettingsSection>
 
-          <Section icon={<X className="h-3 w-3" />} label="Exclude Keywords" color="text-destructive">
+          {/* Exclude Keywords */}
+          <SettingsSection icon={<X className="h-3.5 w-3.5" />} label="Exclude Keywords" color="text-destructive">
             <input
-              className="h-7 w-full rounded-md border-0 bg-muted px-2 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30"
-              value={profile.keywords_exclude.join(', ')}
+              className="h-8 w-full rounded-lg border border-border/50 bg-muted/50 px-2.5 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring/20"
+              value={local.keywords_exclude.join(', ')}
               onChange={e => update('keywords_exclude', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
               placeholder="Junior, internship, sales..."
             />
-          </Section>
+          </SettingsSection>
         </div>
       )}
 
-      <div className="flex-shrink-0 px-4 py-3 border-t border-border">
-        <button onClick={handleSave} disabled={saving || !profile.target_roles.length}
-          className={cn('w-full rounded-lg py-2 font-sans text-xs font-bold transition-all',
-            profile.target_roles.length
-              ? 'bg-gradient-brand text-primary-foreground shadow-lg shadow-primary/15 hover:shadow-xl hover:shadow-primary/25'
-              : 'bg-muted text-muted-foreground cursor-not-allowed')}>
-          {saving ? 'Saving...' : !profile.target_roles.length ? 'Select at least one role' : 'Save Settings'}
-        </button>
+      {/* Footer */}
+      <div className="flex-shrink-0 px-5 py-3.5 border-t border-border/50">
+        <Button
+          onClick={handleSave}
+          loading={saving}
+          disabled={!local.target_roles.length}
+          className="w-full"
+          size="lg"
+        >
+          {!local.target_roles.length ? 'Select at least one role' : 'Save Settings'}
+        </Button>
       </div>
     </div>
   )
 }
 
-function Section({ icon, label, color, children }: { icon: React.ReactNode; label: string; color: string; children: React.ReactNode }) {
+function SettingsSection({ icon, label, color, children }: {
+  icon: React.ReactNode; label: string; color: string; children: React.ReactNode
+}) {
   return (
     <div>
-      <div className="flex items-center gap-1.5 mb-1.5">
+      <div className="flex items-center gap-1.5 mb-2">
         <span className={color}>{icon}</span>
-        <span className="font-sans text-[11px] font-semibold text-foreground">{label}</span>
+        <span className="text-xs font-semibold text-foreground">{label}</span>
       </div>
       {children}
     </div>
