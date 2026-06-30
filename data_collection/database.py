@@ -136,6 +136,18 @@ class DatabaseConnection:
         """Rollback the current transaction."""
         self._conn.rollback()
 
+    def ping(self) -> bool:
+        """Check if the connection is alive by executing a lightweight query.
+
+        Returns True if the connection is healthy, False otherwise.
+        """
+        try:
+            self._cur.execute("SELECT 1")
+            self._cur.fetchone()
+            return True
+        except Exception:
+            return False
+
     def close(self):
         """Return the connection to the pool."""
         try:
@@ -221,6 +233,56 @@ def get_connection() -> DatabaseConnection:
     """Get a database connection from the connection pool."""
     conn = _get_pool().getconn()
     return DatabaseConnection(conn)
+
+
+def check_pool_health() -> dict:
+    """Validate the connection pool is healthy.
+
+    Acquires a test connection, pings it, and returns it to the pool.
+    Returns a dict with status and diagnostics suitable for a health-check endpoint.
+    """
+    result = {
+        "healthy": False,
+        "pool_initialized": _pool is not None,
+        "ping_ms": None,
+        "error": None,
+    }
+    if _pool is None:
+        result["error"] = "Connection pool not initialized"
+        return result
+
+    try:
+        conn = get_connection()
+        try:
+            start = __import__("time").monotonic()
+            alive = conn.ping()
+            elapsed = __import__("time").monotonic() - start
+            result["healthy"] = alive
+            result["ping_ms"] = round(elapsed * 1000, 2)
+            if not alive:
+                result["error"] = "Ping returned False"
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("Database health check failed")
+        result["error"] = "Database health check failed"
+
+    return result
+
+
+def get_pool_stats() -> dict:
+    """Return connection pool statistics for monitoring.
+
+    Returns a dict with minconn, maxconn, and whether the pool is initialized.
+    Note: psycopg2 ThreadedConnectionPool does not expose used/idle counts.
+    """
+    if _pool is None:
+        return {"initialized": False, "minconn": None, "maxconn": None}
+    return {
+        "initialized": True,
+        "minconn": _pool.minconn,
+        "maxconn": _pool.maxconn,
+    }
 
 
 def normalize_location(location: str) -> str:

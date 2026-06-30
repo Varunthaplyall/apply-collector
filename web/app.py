@@ -38,7 +38,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from data_collection.auth import get_current_user, optional_auth, require_auth
-from data_collection.database import get_connection, init_db
+from data_collection.database import check_pool_health, get_connection, get_pool_stats, init_db
 from data_collection.user_profile import (
     CandidateProfile,
     get_active_profile,
@@ -341,6 +341,19 @@ def _get_distinct_values(column: str, table: str = "jobs") -> list[str]:
 def api_stats():
     """JSON stats endpoint — global job pool with per-user profile matches."""
     return jsonify(_get_db_stats())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API — Health
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@app.route("/api/health")
+def api_health():
+    """Health-check endpoint. Returns pool status and ping latency."""
+    health = check_pool_health()
+    pool = get_pool_stats()
+    return jsonify({**health, "pool": pool})
 
 
 # ═══════════════════════════════════════════════════════════════════════════

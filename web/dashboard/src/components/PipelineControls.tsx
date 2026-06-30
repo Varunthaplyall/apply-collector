@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { triggerCollect, createRunSSE, fetchPipelineStatus, fetchCollectionStatus } from '@/lib/api'
 import type { PipelineStatus, CollectionStatus } from '@/lib/api'
 import { useToast } from '@/lib/ToastContext'
+import { useAdminMode } from '@/lib/admin'
 import {
   Play, Loader2, Terminal, Zap, CheckCircle2, Clock,
   Sparkles, ArrowRight, ChevronDown, ChevronUp, Rocket, Layers,
@@ -40,6 +41,7 @@ export default function PipelineControls({
   onStatusTick,
   isPipelineRunning = false,
 }: PipelineControlsProps) {
+  const { isAdmin } = useAdminMode()
   const { addToast } = useToast()
   const [running, setRunning] = useState(false)
   const [stage, setStage] = useState<string | null>(null)
@@ -287,8 +289,8 @@ export default function PipelineControls({
             </div>
           )}
 
-          {/* ── Dev-only: manual Run Pipeline trigger ── */}
-          {import.meta.env.DEV && (
+          {/* ── Admin-only: manual Run Pipeline trigger ── */}
+          {isAdmin && (
             <motion.button
               whileHover={profileReady && !running ? { scale: 1.03 } : {}}
               whileTap={profileReady && !running ? { scale: 0.97 } : {}}
@@ -303,7 +305,7 @@ export default function PipelineControls({
                 running && 'bg-gradient-to-r from-brand-blue to-brand-violet text-white shadow-lg shadow-brand-violet/25',
                 done && 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/25',
               )}
-              title={!profileReady ? 'Set up your profile first' : running ? 'Pipeline is running' : 'DEV: Run collection'}
+              title={!profileReady ? 'Set up your profile first' : running ? 'Pipeline is running' : 'Run collection pipeline'}
             >
               <div className="absolute inset-0 rounded-xl bg-gradient-to-b from-white/10 to-transparent pointer-events-none" />
               {running && (
@@ -332,7 +334,7 @@ export default function PipelineControls({
                   {running ? 'Collecting…'
                    : done
                    ? (result ? `+${result.inserted} jobs` : 'Done!')
-                   : 'Run (Dev)'}
+                   : 'Run Pipeline'}
                 </span>
               </span>
             </motion.button>
