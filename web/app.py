@@ -117,9 +117,7 @@ _PIPELINE_SOURCES: list[dict] = [
 # Additional sources referenced in SourceBreakdown but not yet in async pipeline
 # (shown as pending/not-in-this-run for future compatibility)
 _PIPELINE_EXTRA_SOURCES: list[dict] = [
-    {"name": "wellfound",  "label": "Wellfound",   "color": "rose",     "gradient": "from-rose-500 to-pink-500"},
     {"name": "adzuna",     "label": "Adzuna",      "color": "teal",     "gradient": "from-teal-500 to-emerald-500"},
-    {"name": "iimjobs",    "label": "IIM Jobs",    "color": "fuchsia",  "gradient": "from-fuchsia-500 to-pink-500"},
     {"name": "jsearch",    "label": "JSearch",     "color": "yellow",   "gradient": "from-yellow-500 to-amber-500"},
 ]
 
