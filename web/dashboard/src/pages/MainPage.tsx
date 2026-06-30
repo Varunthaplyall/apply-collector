@@ -204,32 +204,44 @@ export default function MainPage() {
 
         {/* Tab Content */}
         <div className="flex-1 overflow-y-auto">
-          {isAdmin && activeTab === 'dashboard' ? (
-            <DashboardTab
-              stats={stats ?? null}
-              statsLoading={statsLoading}
-              collectionStatus={collectionStatus ?? null}
-              profile={profile ?? null}
-            />
-          ) : isAdmin && activeTab === 'history' ? (
-            <HistoryTab runHistory={runHistory ?? []} />
-          ) : (
-            <JobsTab
-              filters={Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, String(v)]))}
-              jobsData={jobsData ?? null}
-              loading={jobsLoading}
-              error={jobsError instanceof Error ? jobsError.message : null}
-              activeFilterCount={activeFilterCount}
-              collectionStatus={collectionStatus ?? null}
-              updateFilter={updateFilter}
-              clearFilters={clearFilters}
-              handleDismiss={handleDismiss}
-              handleSave={handleSave}
-              scoreColor={scoreColor}
-              scoreBg={scoreBg}
-              onRetry={() => refetchJobs()}
-            />
-          )}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={isAdmin ? activeTab : 'jobs'}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="h-full"
+            >
+              {isAdmin && activeTab === 'dashboard' ? (
+                <DashboardTab
+                  stats={stats ?? null}
+                  statsLoading={statsLoading}
+                  collectionStatus={collectionStatus ?? null}
+                  profile={profile ?? null}
+                />
+              ) : isAdmin && activeTab === 'history' ? (
+                <HistoryTab runHistory={runHistory ?? []} />
+              ) : (
+                <JobsTab
+                  filters={Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, String(v)]))}
+                  jobsData={jobsData ?? null}
+                  loading={jobsLoading}
+                  error={jobsError instanceof Error ? jobsError.message : null}
+                  activeFilterCount={activeFilterCount}
+                  collectionStatus={collectionStatus ?? null}
+                  updateFilter={updateFilter}
+                  clearFilters={clearFilters}
+                  handleDismiss={handleDismiss}
+                  handleSave={handleSave}
+                  scoreColor={scoreColor}
+                  scoreBg={scoreBg}
+                  onRetry={() => refetchJobs()}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </main>
 
@@ -510,7 +522,7 @@ function HistoryTab({ runHistory }: { runHistory: RunRecord[] }) {
 function JobsTab({
   filters, jobsData, loading, error, activeFilterCount,
   collectionStatus, updateFilter, clearFilters,
-  handleDismiss, handleSave, scoreColor, scoreBg, onRetry,
+  handleDismiss, handleSave, scoreColor, scoreBg, onRetry, onOpenSettings,
 }: {
   filters: Record<string, string>
   jobsData: JobsResponse | null
@@ -525,6 +537,7 @@ function JobsTab({
   scoreColor: (s: number | null | undefined) => string
   scoreBg: (s: number | null | undefined) => string
   onRetry: () => void
+  onOpenSettings: () => void
 }) {
   const [searchValue, setSearchValue] = useState(filters.search)
 
@@ -653,11 +666,25 @@ function JobsTab({
         ) : !jobsData?.jobs?.length ? (
           <EmptyState
             icon={<Briefcase className="h-8 w-8" />}
-            title="No jobs match your filters"
-            description={activeFilterCount > 0 ? 'Try removing some filters to broaden your search.' : 'No jobs have been collected yet. Jobs appear here after collection runs.'}
-            action={activeFilterCount > 0 ? (
-              <Button variant="outline" size="sm" onClick={clearFilters}>Clear filters</Button>
-            ) : undefined}
+            title={
+              activeFilterCount > 0
+                ? 'No jobs match your filters'
+                : 'No jobs collected yet'
+            }
+            description={
+              activeFilterCount > 0
+                ? 'Try removing some filters or adjusting your search terms.'
+                : 'Jobs are collected automatically every 4 hours. Check back soon, or adjust your profile settings to match more sources.'
+            }
+            action={
+              activeFilterCount > 0 ? (
+                <Button variant="outline" size="sm" onClick={clearFilters}>Clear filters</Button>
+              ) : (
+                <Button variant="outline" size="sm" onClick={onOpenSettings}>
+                  <Settings className="h-3.5 w-3.5 mr-1.5" /> Adjust Profile
+                </Button>
+              )
+            }
           />
         ) : (
           <>
