@@ -62,15 +62,15 @@ def _build_async_collectors() -> list[AsyncBaseCollector]:
         AsyncRemoteOKCollector(),
         AsyncArbeitnowCollector(),
         AsyncHimalayasCollector(),
-        AsyncYCCollector(months_back=3),       # HN "Who is hiring?" — last 3 months
+        AsyncYCCollector(months_back=_get_yc_months_back()),
         AsyncCutshortCollector(
             max_jobs=cutshort_limit,
             max_concurrency=10,
             delay_between_requests=0.5,
         ),
         AsyncLinkedInCollector(
-            time_filter="week",
-            max_jobs_per_query=75,
+            time_filter="month",
+            max_jobs_per_query=200,
             concurrency=2,
             delay_between_requests=3.0,
         ),
@@ -235,22 +235,19 @@ def main() -> None:
 
 def _build_collectors(
     cutshort_limit: int = 1000,
-    search_roles: list[str] | None = None,
-    search_locations: list[str] | None = None,
 ) -> list[AsyncBaseCollector]:
     """Build async collectors with explicit parameters.
 
-    Args:
-        cutshort_limit: Max Cutshort jobs to scrape.
-        search_roles: Job titles from the profile to use as search queries
-                      (for sources that support search: LinkedIn, Adzuna, JSearch).
-        search_locations: Preferred locations from the profile.
+    All collectors use broad default search queries — the global pool
+    must contain every job possible. Profile-based filtering happens
+    at query time, not at collection time.
     """
-    roles = search_roles or []
-    locations = search_locations or []
-
-    # ── Build search queries for parameterizable sources ──
-    linkedin_queries = _build_search_queries(roles, locations, default_roles=LINKEDIN_DEFAULT_ROLES)
+    # Always use broad defaults for search-based sources (LinkedIn, etc.)
+    linkedin_queries = _build_search_queries(
+        roles=LINKEDIN_DEFAULT_ROLES,
+        locations=["India", "Remote", "United States"],
+        default_roles=None,
+    )
 
     return [
         AsyncRemotiveCollector(),
@@ -259,16 +256,16 @@ def _build_collectors(
         AsyncRemoteOKCollector(),
         AsyncArbeitnowCollector(),
         AsyncHimalayasCollector(),
-        AsyncYCCollector(months_back=3),
+        AsyncYCCollector(months_back=_get_yc_months_back()),
         AsyncCutshortCollector(
             max_jobs=cutshort_limit,
             max_concurrency=10,
             delay_between_requests=0.5,
         ),
         AsyncLinkedInCollector(
-            queries=linkedin_queries if linkedin_queries else None,
-            time_filter="week",
-            max_jobs_per_query=75,
+            queries=linkedin_queries,
+            time_filter="month",
+            max_jobs_per_query=200,
             concurrency=2,
             delay_between_requests=3.0,
         ),
@@ -282,6 +279,15 @@ LINKEDIN_DEFAULT_ROLES = [
     "devops engineer", "platform engineer", "engineering manager",
     "site reliability engineer",
 ]
+
+
+def _get_yc_months_back() -> int:
+    """Return configured YC months_back, defaulting to 6."""
+    import os
+    try:
+        return int(os.environ.get("YC_MONTHS_BACK", "6"))
+    except (TypeError, ValueError):
+        return 6
 JSEARCH_DEFAULT_QUERIES = [
     "python developer", "software engineer", "backend engineer",
     "full stack developer", "data engineer", "devops engineer",
@@ -302,6 +308,7 @@ def _build_search_queries(
     """Build LinkedIn-style search queries: (role × location) pairs.
 
     If no roles given, fallback to default_roles with broad India locations.
+    Locations are capped at 6 to keep the query count manageable.
     """
     if not roles and default_roles:
         roles = default_roles
@@ -323,17 +330,16 @@ def _build_search_queries(
 async def run_collection(
     cutshort_limit: int = 500,
     with_browser: bool = False,
-    search_roles: list[str] | None = None,
-    search_locations: list[str] | None = None,
     progress_cb: Callable | None = None,
 ) -> dict:
-    """Run all collectors. Returns result dict.
+    """Run all collectors. Fetches ALL jobs into the global pool — no filtering.
+
+    Profile-based filtering happens at query time (via /api/jobs), not here.
+    All jobs from all sources are inserted into the shared global pool.
 
     Args:
         cutshort_limit: Max Cutshort jobs to scrape (lower = faster).
         with_browser: If True, also run Workday scraper (slower).
-        search_roles: Profile target roles — used to focus search collectors.
-        search_locations: Profile preferred locations — used to focus searches.
         progress_cb: Optional callback for per-source progress:
                      cb(source_name, status, jobs_found=0, error=None)
                      status ∈ {"running", "completed", "error"}
@@ -351,12 +357,8 @@ async def run_collection(
     total_inserted = 0
     total_existing = 0
 
-    # Phase 1: Async collectors (scoped to profile preferences)
-    collectors = _build_collectors(
-        cutshort_limit=cutshort_limit,
-        search_roles=search_roles,
-        search_locations=search_locations,
-    )
+    # Phase 1: Async collectors — fetch everything with broad queries
+    collectors = _build_collectors(cutshort_limit=cutshort_limit)
     try:
         async_jobs = await run_async_collectors(collectors, progress_cb=progress_cb)
     except Exception as exc:
@@ -372,22 +374,14 @@ async def run_collection(
             sync_jobs = []
         async_jobs.extend(sync_jobs)
 
-    # ── Post-collection filtering ──
-    # Apply profile-based filters to prune irrelevant jobs from sources that
-    # don't support query-based search (Remotive, Greenhouse, Lever, etc.)
-    before_filter = len(async_jobs)
-    if search_roles or search_locations:
-        async_jobs = _post_filter_jobs(async_jobs, search_roles, search_locations)
-        filtered_out = before_filter - len(async_jobs)
-        if filtered_out:
-            logger.info(
-                "Post-filter: kept %d/%d jobs (filtered %d irrelevant)",
-                len(async_jobs), before_filter, filtered_out,
-            )
-
+    # ── Insert ALL jobs into global pool (no post-collection filtering) ──
     inserted, existing = persist_jobs(async_jobs)
     total_inserted += inserted
     total_existing += existing
+    logger.info(
+        "Persisted %d new + %d existing (%d total collected)",
+        inserted, existing, len(async_jobs),
+    )
 
     # ── Always score new jobs against active profiles ──
     scored_count = 0
@@ -412,77 +406,6 @@ async def run_collection(
         "errors": errors,
         "scored": scored_count,
     }
-
-
-def _post_filter_jobs(
-    jobs: list,
-    search_roles: list[str],
-    search_locations: list[str],
-) -> list:
-    """Post-collection filter: keep only jobs that match profile preferences.
-
-    This is a loose filter — it keeps jobs where the title or description
-    mentions any target role keyword, and the location overlaps. We don't
-    want to be too aggressive since the scoring engine will rank them later.
-    """
-    if not search_roles and not search_locations:
-        return jobs
-
-    role_keywords: set[str] = set()
-    for role in search_roles:
-        for word in role.lower().split():
-            if len(word) > 2:  # skip short words like "in", "of"
-                role_keywords.add(word)
-
-    loc_keywords: set[str] = set()
-    for loc in search_locations:
-        for word in loc.lower().split(","):
-            word = word.strip()
-            if len(word) > 1:
-                loc_keywords.add(word)
-
-    # Special: "remote" should match in location
-    has_remote = "remote" in {l.lower() for l in search_locations}
-
-    keep = []
-    for job in jobs:
-        title_lower = (job.title or "").lower()
-        desc_lower = (job.description or "")[:2000].lower()
-        loc_lower = (job.location or "").lower()
-        combined = f"{title_lower} {desc_lower}"
-
-        # Title/role match: at least one role keyword in title or description
-        role_match = False
-        if role_keywords:
-            for kw in role_keywords:
-                if kw in title_lower:
-                    role_match = True
-                    break
-            if not role_match:
-                # Check if any full role phrase appears
-                for role in search_roles:
-                    if role.lower() in combined:
-                        role_match = True
-                        break
-        else:
-            role_match = True  # no role filter
-
-        # Location match
-        loc_match = False
-        if loc_keywords:
-            for kw in loc_keywords:
-                if kw in loc_lower:
-                    loc_match = True
-                    break
-            if not loc_match and has_remote and "remote" in loc_lower:
-                loc_match = True
-        else:
-            loc_match = True
-
-        if role_match and loc_match:
-            keep.append(job)
-
-    return keep
 
 
 if __name__ == "__main__":

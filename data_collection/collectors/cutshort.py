@@ -1,14 +1,8 @@
 """
-Cutshort.io collector — India-focused tech job board.
+Cutshort.io collector — tech job board.
 
-Async version with rate limiting, India filtering, and configurable limits.
+Async version with rate limiting and configurable limits.
 Uses sitemap to discover job URLs, then scrapes JSON-LD for details.
-
-Key changes from v1:
-  - AsyncBaseCollector (concurrent HTTP with semaphore)
-  - India-only filtering: checks JSON-LD addressRegion or location string
-  - Rate limiting: configurable delay between requests
-  - --cutshort-limit N flag in run_all_async.py
 """
 
 import asyncio
@@ -24,30 +18,17 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from data_collection.collectors.base import AsyncBaseCollector
-from data_collection.database import is_india_location
 from data_collection.models import JobPosting, JobSource
 
 logger = logging.getLogger(__name__)
 
 
 class AsyncCutshortCollector(AsyncBaseCollector):
-    """Async collector for Cutshort.io — India-focused tech job board."""
+    """Async collector for Cutshort.io — tech job board with sitemap-based discovery."""
 
     source_name = JobSource.CUTSHORT.value
 
     SITEMAP_URL = "https://cutshort-data.s3.amazonaws.com/cloudfront/public/jobs-sitemap.xml"
-
-    # India location indicators (substring match, lowercased)
-    _INDIA_KEYWORDS = [
-        "india", "bengaluru", "bangalore", "mumbai", "bombay",
-        "delhi", "gurugram", "gurgaon", "noida", "hyderabad",
-        "pune", "chennai", "kolkata", "calcutta", "ahmedabad",
-        "jaipur", "kochi", "cochin", "coimbatore", "mysore",
-        "trivandrum", "thiruvananthapuram", "indore", "nagpur",
-        "chandigarh", "lucknow", "visakhapatnam", "patna",
-        "vadodara", "surat", "rajkot", "warangal",
-        "remote india", "remote - india",
-    ]
 
     def __init__(
         self,
@@ -60,23 +41,6 @@ class AsyncCutshortCollector(AsyncBaseCollector):
         self.max_concurrency = max_concurrency
         self.delay = delay_between_requests
         self.timeout = timeout
-
-    def _is_india_job(self, location: str, json_ld: dict | None = None) -> bool:
-        """Check if a job is India-based using location string and JSON-LD."""
-        # 1. Check JSON-LD addressRegion if available
-        if json_ld:
-            addr = json_ld.get("jobLocation", {})
-            if isinstance(addr, dict):
-                addr = addr.get("address", {})
-            if isinstance(addr, dict):
-                region = (addr.get("addressRegion") or "").upper()
-                country = (addr.get("addressCountry") or "").upper()
-                if region == "IN" or country == "IN" or country == "INDIA":
-                    return True
-
-        # 2. Fallback: substring match on location string
-        loc_lower = location.lower()
-        return any(kw in loc_lower for kw in self._INDIA_KEYWORDS)
 
     def _extract_json_ld(self, html: str) -> dict | None:
         """Extract JSON-LD structured data from HTML."""
@@ -191,7 +155,7 @@ class AsyncCutshortCollector(AsyncBaseCollector):
         url: str,
         lastmod: datetime | None,
     ) -> JobPosting | None:
-        """Fetch, parse, and filter a single Cutshort job page."""
+        """Fetch and parse a single Cutshort job page."""
         job_id = url.split("-")[-1] if "-" in url else ""
         if not job_id:
             return None
@@ -208,10 +172,6 @@ class AsyncCutshortCollector(AsyncBaseCollector):
             if not job_data:
                 return None
 
-            # India-only filter
-            if not self._is_india_job(job_data["location"], job_data.get("json_ld")):
-                return None
-
             return JobPosting(
                 source=JobSource.CUTSHORT,
                 source_id=f"cutshort-{job_id}",
@@ -224,7 +184,7 @@ class AsyncCutshortCollector(AsyncBaseCollector):
             )
 
     async def collect(self) -> Sequence[JobPosting]:
-        """Collect India jobs from Cutshort sitemap (async, rate-limited)."""
+        """Collect jobs from Cutshort sitemap (async, rate-limited)."""
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -261,7 +221,7 @@ class AsyncCutshortCollector(AsyncBaseCollector):
                         jobs.append(result)
 
                 self.logger.info(
-                    "[Cutshort] Processed %d/%d URLs, %d India jobs so far",
+                    "[Cutshort] Processed %d/%d URLs, %d jobs so far",
                     min(i + batch_size, len(all_urls)),
                     len(all_urls),
                     len(jobs),
@@ -271,5 +231,5 @@ class AsyncCutshortCollector(AsyncBaseCollector):
                     break
 
         jobs = jobs[:self.max_jobs]
-        self.logger.info("[Cutshort] Total: %d India jobs collected", len(jobs))
+        self.logger.info("[Cutshort] Total: %d jobs collected", len(jobs))
         return jobs

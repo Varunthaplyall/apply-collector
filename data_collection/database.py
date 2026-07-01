@@ -702,9 +702,18 @@ def insert_job(conn, job: JobPosting) -> int | None:
     Uses ON CONFLICT (source, source_id) DO NOTHING — deduplicates globally.
     All users share the same job pool; personalization happens in profile_job_matches.
 
-    Also computes a semantic embedding for the job if not already present.
+    Also applies quality reject filters (non-engineering roles, staffing agencies)
+    and computes a semantic embedding for the job if not already present.
     Caller is responsible for conn.commit().
     """
+    # ── Quality reject filter ──
+    # Skip clearly non-engineering jobs and staffing agencies.
+    # These are quality gates, not profile-specific filters.
+    from normalize.dedup import is_reject_job
+    if is_reject_job(job.title, job.company):
+        logger.debug("Reject filter skipped: %s @ %s", job.title, job.company)
+        return None
+
     norm_location = normalize_location(job.location)
     india_flag = 1 if is_india_location(norm_location) else 0
 

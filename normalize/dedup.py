@@ -48,6 +48,32 @@ REJECT_COMPANY_PATTERNS: list[re.Pattern] = [
 ]
 
 
+def is_reject_job(title: str, company: str = "") -> bool:
+    """Check if a job should be rejected based on title or company patterns.
+
+    Returns True if the job is clearly NOT an engineering/tech role
+    (e.g., driver, cashier, nanny) or is from a known staffing agency.
+    These are quality filters, not profile-specific — no engineering
+    candidate would want these jobs.
+
+    Args:
+        title: Job title string.
+        company: Company name string (optional).
+
+    Returns:
+        True if the job should be rejected (filtered out).
+    """
+    if title:
+        for pat in REJECT_TITLE_PATTERNS:
+            if pat.search(title):
+                return True
+    if company:
+        for pat in REJECT_COMPANY_PATTERNS:
+            if pat.search(company):
+                return True
+    return False
+
+
 def normalize_title(title: str) -> str:
     """Normalize title for fuzzy matching."""
     import re

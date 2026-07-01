@@ -634,23 +634,13 @@ def _run_collection_in_thread(cutshort_limit: int, user_id: str | None = None) -
         _emit("phase", {"phase": "start", "message": "Starting collection run..."})
         _pipeline_phase_callback("start", "Starting collection run...")
 
-        # Use any active profile to scope search queries, but jobs go to global pool
-        profile = get_active_profile(user_id=user_id)
-        if profile:
-            search_roles = profile.target_roles + profile.job_title_aliases
-            search_locations = profile.preferred_locations
-            msg = (f"Scoping search to: {', '.join(search_roles[:3])}"
-                   + (f" in {', '.join(search_locations[:3])}" if search_locations else ""))
-            _emit("phase", {"phase": "profile", "message": msg})
-            _pipeline_phase_callback("profile", msg)
-        else:
-            search_roles = None
-            search_locations = None
-            _emit("phase", {
-                "phase": "profile",
-                "message": "No profile set — collecting all jobs broadly",
-            })
-            _pipeline_phase_callback("profile", "No profile set — collecting all jobs broadly")
+        # Global pool collection — always fetch ALL jobs with broad queries.
+        # Profile-based filtering happens at query time, not at collection time.
+        _emit("phase", {
+            "phase": "profile",
+            "message": "Collecting all jobs into global pool (broad queries)",
+        })
+        _pipeline_phase_callback("profile", "Collecting all jobs into global pool (broad queries)")
 
         # Import here to avoid early imports
         from data_collection.run_all_async import run_collection
@@ -680,8 +670,6 @@ def _run_collection_in_thread(cutshort_limit: int, user_id: str | None = None) -
                 run_collection(
                     cutshort_limit=cutshort_limit,
                     with_browser=False,
-                    search_roles=search_roles,
-                    search_locations=search_locations,
                     progress_cb=on_source_progress,
                 )
             )
