@@ -86,6 +86,9 @@ _run_lock = threading.Lock()
 _run_active: bool = False
 _run_events: queue.Queue[dict] = queue.Queue()  # SSE event queue
 
+# Per-user boost cooldown: user_id → last boost timestamp (server-enforced rate limit)
+_boost_cooldowns: dict[str, float] = {}
+
 # Per-source pipeline state — shared between the collection runner thread
 # and the polling status endpoint.  Updated by the progress callback.
 _pipeline_lock = threading.Lock()
@@ -832,11 +835,23 @@ def api_trigger_boost():
     profile-specific queries, inserts into the global pool, and scores
     results against the calling user's profile immediately.
 
-    Rate-limited: 1 boost per hour per user (enforced client-side).
+    Rate-limited: 1 boost per hour per user (server-enforced).
     """
     user_id = get_current_user()
     if not user_id:
         return jsonify({"ok": False, "error": "Authentication required"}), 401
+
+    # ── Server-side rate limit: 1 boost per hour per user ──
+    import time as _time
+    now = _time.time()
+    last = _boost_cooldowns.get(user_id, 0)
+    if now - last < 3600:
+        remaining = int(3600 - (now - last))
+        return jsonify({
+            "ok": False,
+            "error": f"Boost cooldown active. Try again in {remaining // 60}m {remaining % 60}s.",
+            "retry_after_s": remaining,
+        }), 429
 
     # Load the user's active profile
     profile = get_active_profile(user_id=user_id)
@@ -852,19 +867,21 @@ def api_trigger_boost():
             "error": "Add target roles to your profile before boosting.",
         }), 400
 
-    search_roles = profile.target_roles + profile.job_title_aliases
+    # ── Cap search roles to prevent resource amplification ──
+    search_roles = (profile.target_roles + profile.job_title_aliases)[:10]
     search_locations = profile.preferred_locations
+
+    # Set cooldown before spawning thread
+    _boost_cooldowns[user_id] = now
 
     # Run in background thread so the request doesn't time out
     import threading
     import asyncio
     from data_collection.run_all_async import run_linkedin_boost
 
-    result_holder: dict = {}
-
     def _run_boost():
         try:
-            _emit("phase", {
+            _emit("boost:phase", {
                 "phase": "boost",
                 "message": f"Boosting LinkedIn for: {', '.join(search_roles[:3])}...",
             })
@@ -882,8 +899,7 @@ def api_trigger_boost():
             finally:
                 loop.close()
 
-            result_holder.update(boost_result)
-            _emit("phase", {
+            _emit("boost:phase", {
                 "phase": "boost_complete",
                 "message": (
                     f"Boost complete: {boost_result.get('inserted', 0)} new, "
@@ -891,12 +907,12 @@ def api_trigger_boost():
                     f"{boost_result.get('scored', 0)} scored for your profile"
                 ),
             })
-            _emit("result", {"stage": "boost", **boost_result})
+            _emit("boost:result", {"stage": "boost", **boost_result})
         except Exception as exc:
             logger.exception("Boost failed")
-            _emit("error", {"stage": "boost", "error": str(exc)})
+            _emit("boost:error", {"stage": "boost", "error": str(exc)})
         finally:
-            _emit("done", {})
+            _emit("boost:done", {})
 
     thread = threading.Thread(target=_run_boost, daemon=True)
     thread.start()

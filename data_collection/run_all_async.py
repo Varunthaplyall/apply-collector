@@ -438,12 +438,18 @@ async def run_linkedin_boost(
     start = time.time()
     errors: list[str] = []
 
-    # Build LinkedIn queries from profile preferences
+    # ── Cap search scope to prevent resource amplification ──
+    # Roles capped at 10, locations at 6 (capped in _build_search_queries).
+    # Total queries capped at 60 to keep boost lightweight (~30-60s).
+    roles = search_roles[:10]
+    locations = search_locations if search_locations else ["India", "Remote"]
+
     linkedin_queries = _build_search_queries(
-        roles=search_roles,
-        locations=search_locations if search_locations else ["India", "Remote"],
+        roles=roles,
+        locations=locations,
         default_roles=None,
     )
+    linkedin_queries = linkedin_queries[:60]  # hard cap
 
     if not linkedin_queries:
         return {"inserted": 0, "existing": 0, "scored": 0, "queries": 0,
