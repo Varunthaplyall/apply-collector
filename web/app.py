@@ -624,7 +624,7 @@ def api_history():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _run_collection_in_thread(cutshort_limit: int) -> None:
+def _run_collection_in_thread(cutshort_limit: int, user_id: str | None = None) -> None:
     """Run Stage 1 (collection) in a background thread — writes to global job pool."""
     global _run_active
     # Reset per-source pipeline state
@@ -635,7 +635,7 @@ def _run_collection_in_thread(cutshort_limit: int) -> None:
         _pipeline_phase_callback("start", "Starting collection run...")
 
         # Use any active profile to scope search queries, but jobs go to global pool
-        profile = get_active_profile(user_id=get_current_user())
+        profile = get_active_profile(user_id=user_id)
         if profile:
             search_roles = profile.target_roles + profile.job_title_aliases
             search_locations = profile.preferred_locations
@@ -767,6 +767,9 @@ def api_trigger_collect():
             return jsonify({"ok": False, "error": "A run is already in progress"}), 409
         _run_active = True
 
+    # Capture user_id while we have a request context — g is unavailable in threads
+    user_id = get_current_user()
+
     # Clear stale events
     while not _run_events.empty():
         try:
@@ -777,7 +780,7 @@ def api_trigger_collect():
     cutshort_limit = 10000  # effectively no limit — collect everything
     thread = threading.Thread(
         target=_run_collection_in_thread,
-        args=(cutshort_limit,),
+        args=(cutshort_limit, user_id),
         daemon=True,
     )
     thread.start()
