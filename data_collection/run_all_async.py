@@ -26,6 +26,7 @@ from data_collection.collectors.cutshort import AsyncCutshortCollector
 from data_collection.collectors.linkedin import AsyncLinkedInCollector
 from data_collection.collectors.workday import WorkdayScraper
 from data_collection.database import get_connection, init_db, insert_run_history, persist_jobs
+from data_collection.models import JobPosting
 from datetime import datetime, timezone
 
 logging.basicConfig(
