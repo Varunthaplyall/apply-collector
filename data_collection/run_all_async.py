@@ -408,5 +408,107 @@ async def run_collection(
     }
 
 
+async def run_linkedin_boost(
+    search_roles: list[str],
+    search_locations: list[str],
+    user_id: str | None = None,
+    progress_cb: Callable | None = None,
+) -> dict:
+    """Run a targeted LinkedIn-only collection for a user's profile roles.
+
+    This is a lightweight boost — it only runs LinkedIn with profile-specific
+    queries, inserts into the global pool (benefiting all users), then scores
+    new jobs against the calling user's profile.
+
+    Args:
+        search_roles: Profile target roles to search for.
+        search_locations: Profile preferred locations.
+        user_id: The Supabase user UUID to score against after collection.
+
+    Returns:
+        {
+            "inserted": int,     # new jobs added to global pool
+            "existing": int,     # duplicates skipped
+            "scored": int,       # jobs scored against this profile
+            "queries": int,      # number of LinkedIn queries used
+            "elapsed": float,
+            "errors": [str],
+        }
+    """
+    start = time.time()
+    errors: list[str] = []
+
+    # Build LinkedIn queries from profile preferences
+    linkedin_queries = _build_search_queries(
+        roles=search_roles,
+        locations=search_locations if search_locations else ["India", "Remote"],
+        default_roles=None,
+    )
+
+    if not linkedin_queries:
+        return {"inserted": 0, "existing": 0, "scored": 0, "queries": 0,
+                "elapsed": 0, "errors": ["No search queries generated"]}
+
+    logger.info(
+        "Boost: running LinkedIn with %d queries for roles=%s locations=%s",
+        len(linkedin_queries),
+        search_roles[:3],
+        (search_locations or ["India", "Remote"])[:3],
+    )
+
+    # Run LinkedIn collector with profile-specific queries
+    collector = AsyncLinkedInCollector(
+        queries=linkedin_queries,
+        time_filter="month",
+        max_jobs_per_query=75,
+        concurrency=2,
+        delay_between_requests=2.0,
+    )
+
+    try:
+        if progress_cb:
+            progress_cb("linkedin", "running", 0)
+        jobs = await collector.collect()
+        if progress_cb:
+            progress_cb("linkedin", "completed", len(jobs))
+    except Exception as exc:
+        errors.append(f"linkedin: {exc}")
+        jobs = []
+
+    if not jobs:
+        return {"inserted": 0, "existing": 0, "scored": 0,
+                "queries": len(linkedin_queries),
+                "elapsed": round(time.time() - start, 1), "errors": errors}
+
+    # Insert into global pool
+    inserted, existing = persist_jobs(list(jobs))
+
+    # Score against the calling user's profile
+    scored = 0
+    if user_id:
+        try:
+            from data_collection.user_profile import get_active_profile, score_and_store_matches, CandidateProfile
+            profile = get_active_profile(user_id=user_id)
+            if profile:
+                job_ids = []  # We can't get the IDs easily from persist_jobs — just score all
+                # Re-score all unscored jobs for this profile instead
+                from data_collection.user_profile import score_all_new_jobs
+                scored = score_all_new_jobs(user_id=user_id)
+                logger.info("Boost: scored %d new jobs for user %s", scored, user_id)
+        except Exception as exc:
+            errors.append(f"scoring: {exc}")
+            logger.exception("Boost scoring failed")
+
+    elapsed = time.time() - start
+    return {
+        "inserted": inserted,
+        "existing": existing,
+        "scored": scored,
+        "queries": len(linkedin_queries),
+        "elapsed": round(elapsed, 1),
+        "errors": errors,
+    }
+
+
 if __name__ == "__main__":
     main()

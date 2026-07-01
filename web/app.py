@@ -364,7 +364,14 @@ def api_health():
 @app.route("/api/jobs")
 @optional_auth
 def api_jobs():
-    """JSON jobs listing with filters — global job pool with per-user scoring."""
+    """JSON jobs listing with filters — global job pool with per-user scoring.
+
+    Query params:
+        sort: "newest" (default), "oldest", "company", "title", "match"
+        min_score: minimum profile_score (0-100). When sort=match and a profile
+                   exists, defaults to 30. Pass min_score=0 to see all jobs.
+        source, company, location, search, india, date_from, date_to: standard filters
+    """
     source_filter = request.args.get("source", "").strip()
     company_filter = request.args.get("company", "").strip()
     location_filter = request.args.get("location", "").strip()
@@ -375,6 +382,22 @@ def api_jobs():
     sort = request.args.get("sort", "newest").strip()
     page = max(1, request.args.get("page", 1, type=int))
     per_page = 50
+
+    # Resolve auth and profile
+    user_id = get_current_user()
+    active_profile = get_active_profile(user_id=user_id)
+    profile_id = active_profile.id if (active_profile and active_profile.id) else None
+
+    # ── min_score: profile-aware default filtering ──
+    # When sorting by match with a profile, default to hiding very poor matches
+    # (< 30). User can override with ?min_score=0 to see everything.
+    raw_min_score = request.args.get("min_score", "").strip()
+    if raw_min_score != "":
+        min_score = max(0, min(100, int(raw_min_score)))
+    elif profile_id and sort == "match":
+        min_score = 30  # default: hide very poor matches
+    else:
+        min_score = 0  # no profile or not sorting by match: show all
 
     conn = get_connection()
 
@@ -406,9 +429,24 @@ def api_jobs():
 
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
-    user_id = get_current_user()
-    active_profile = get_active_profile(user_id=user_id)
-    profile_id = active_profile.id if (active_profile and active_profile.id) else None
+    # Build the profile_job_matches join clause
+    # When min_score > 0 and profile exists, use INNER JOIN semantics
+    # to only return jobs with a score >= threshold
+    if profile_id and min_score > 0:
+        pjm_join = (
+            "INNER JOIN profile_job_matches pjm "
+            "ON j.id = pjm.job_id AND pjm.profile_id = ? AND pjm.score >= ?"
+        )
+        pjm_params = [profile_id, min_score]
+    elif profile_id:
+        pjm_join = (
+            "LEFT JOIN profile_job_matches pjm "
+            "ON j.id = pjm.job_id AND pjm.profile_id = ?"
+        )
+        pjm_params = [profile_id]
+    else:
+        pjm_join = ""
+        pjm_params = []
 
     sort_map = {
         "newest": "j.scraped_at DESC",
@@ -425,30 +463,40 @@ def api_jobs():
         sort = "newest"
         order_by = "j.scraped_at DESC"
 
-    count = conn.execute(
-        f"SELECT COUNT(*) FROM jobs j WHERE {where_sql}", params
-    ).fetchone()[0]
+    # When min_score > 0 with profile, count only matching jobs
+    if profile_id and min_score > 0:
+        count_sql = (
+            "SELECT COUNT(*) FROM jobs j "
+            f"INNER JOIN profile_job_matches pjm "
+            "ON j.id = pjm.job_id AND pjm.profile_id = ? AND pjm.score >= ? "
+            f"WHERE {where_sql}"
+        )
+        count = conn.execute(count_sql, [profile_id, min_score] + params).fetchone()[0]
+    else:
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM jobs j WHERE {where_sql}", params
+        ).fetchone()[0]
 
     total_pages = max(1, (count + per_page - 1) // per_page)
     page = min(page, total_pages)
     offset = (page - 1) * per_page
 
     if profile_id:
+        pjm_select = "pjm.score as profile_score, pjm.match_reasons as profile_reasons"
         rows = conn.execute(
             f"""
             SELECT j.id, j.source, j.source_id, j.title, j.company, j.location,
                    j.url, j.salary_range, j.posted_at, j.scraped_at, j.is_india,
                    c.role_fit, c.match_score,
-                   pjm.score as profile_score, pjm.match_reasons as profile_reasons
+                   {pjm_select}
             FROM jobs j
             LEFT JOIN classified_jobs c ON j.id = c.job_id
-            LEFT JOIN profile_job_matches pjm
-                ON j.id = pjm.job_id AND pjm.profile_id = ?
+            {pjm_join}
             WHERE {where_sql}
             ORDER BY {order_by}
             LIMIT ? OFFSET ?
             """,
-            [profile_id] + params + [per_page, offset],
+            pjm_params + params + [per_page, offset],
         ).fetchall()
     else:
         rows = conn.execute(
@@ -773,6 +821,92 @@ def api_trigger_collect():
     )
     thread.start()
     return jsonify({"ok": True, "message": "Collection started"})
+
+
+@app.route("/api/run/collect/boost", methods=["POST"])
+@require_auth
+def api_trigger_boost():
+    """Run a targeted LinkedIn-only collection for the current user's profile.
+
+    This is a lightweight operation (~30-60s) that searches LinkedIn with
+    profile-specific queries, inserts into the global pool, and scores
+    results against the calling user's profile immediately.
+
+    Rate-limited: 1 boost per hour per user (enforced client-side).
+    """
+    user_id = get_current_user()
+    if not user_id:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+
+    # Load the user's active profile
+    profile = get_active_profile(user_id=user_id)
+    if not profile:
+        return jsonify({
+            "ok": False,
+            "error": "No active profile found. Create a profile first.",
+        }), 400
+
+    if not profile.target_roles:
+        return jsonify({
+            "ok": False,
+            "error": "Add target roles to your profile before boosting.",
+        }), 400
+
+    search_roles = profile.target_roles + profile.job_title_aliases
+    search_locations = profile.preferred_locations
+
+    # Run in background thread so the request doesn't time out
+    import threading
+    import asyncio
+    from data_collection.run_all_async import run_linkedin_boost
+
+    result_holder: dict = {}
+
+    def _run_boost():
+        try:
+            _emit("phase", {
+                "phase": "boost",
+                "message": f"Boosting LinkedIn for: {', '.join(search_roles[:3])}...",
+            })
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                boost_result = loop.run_until_complete(
+                    run_linkedin_boost(
+                        search_roles=search_roles,
+                        search_locations=search_locations,
+                        user_id=user_id,
+                    )
+                )
+            finally:
+                loop.close()
+
+            result_holder.update(boost_result)
+            _emit("phase", {
+                "phase": "boost_complete",
+                "message": (
+                    f"Boost complete: {boost_result.get('inserted', 0)} new, "
+                    f"{boost_result.get('existing', 0)} existing, "
+                    f"{boost_result.get('scored', 0)} scored for your profile"
+                ),
+            })
+            _emit("result", {"stage": "boost", **boost_result})
+        except Exception as exc:
+            logger.exception("Boost failed")
+            _emit("error", {"stage": "boost", "error": str(exc)})
+        finally:
+            _emit("done", {})
+
+    thread = threading.Thread(target=_run_boost, daemon=True)
+    thread.start()
+
+    return jsonify({
+        "ok": True,
+        "message": f"Boost started — searching LinkedIn for {len(search_roles)} roles",
+        "roles": search_roles[:5],
+        "locations": search_locations[:5],
+    })
 
 
 @app.route("/api/run/normalize", methods=["POST"])

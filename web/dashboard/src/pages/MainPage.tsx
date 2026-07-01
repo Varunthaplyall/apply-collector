@@ -50,6 +50,12 @@ const SORT_OPTIONS = [
   { value: 'title', label: 'Title' },
 ]
 
+const MATCH_QUALITY_OPTIONS = [
+  { value: '', label: 'All Matches', minScore: 0 },
+  { value: 'good', label: 'Good (50+)', minScore: 50 },
+  { value: 'strong', label: 'Strong (80+)', minScore: 80 },
+]
+
 const ROLE_CATEGORIES = [
   'Software Engineer', 'Senior Software Engineer', 'Engineering Manager',
   'Data Scientist', 'DevOps Engineer', 'Security Engineer',
@@ -94,6 +100,7 @@ export default function MainPage() {
     search: searchParams.get('search') || '',
     india: searchParams.get('india') || '',
     sort: searchParams.get('sort') || 'match',
+    min_score: searchParams.get('min_score') || '',
     page: parseInt(searchParams.get('page') || '1'),
   }), [searchParams])
 
@@ -599,6 +606,26 @@ function JobsTab({
           >
             {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
+
+          {/* Match Quality Filter — only relevant when sort=match */}
+          {filters.sort === 'match' && (
+            <div className="flex items-center rounded-lg border border-border/50 bg-muted/50 overflow-hidden">
+              {MATCH_QUALITY_OPTIONS.map((opt, i) => (
+                <button
+                  key={opt.value}
+                  onClick={() => updateFilter('min_score', opt.minScore === 0 ? '' : String(opt.minScore))}
+                  className={cn(
+                    'h-8 px-2.5 text-xs font-medium transition-colors border-r border-border/50 last:border-r-0',
+                    (filters.min_score || '') === (opt.minScore === 0 ? '' : String(opt.minScore))
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <AnimatePresence>
             {activeFilterCount > 0 && (
